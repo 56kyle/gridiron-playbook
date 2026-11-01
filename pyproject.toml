@@ -27,6 +27,7 @@ dependencies = [
     "loguru>=0.7.3",
     "platformdirs>=4.3.8",
     "pydantic>=2.14.1",
+    "srctools>=2.7.0",
     "typer>=0.15.4",
     "typing-extensions>=4.13.2",
 ]
