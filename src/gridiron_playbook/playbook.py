@@ -1,7 +1,9 @@
 """Module containing playbook save schemas for the gridiron_playbook package."""
+from pathlib import Path
 
 from pydantic import Field
 
+from gridiron_playbook.game import get_gridiron_playbook_path
 from gridiron_playbook.play import GridironLastDrawnPlay
 from gridiron_playbook.play import GridironPlay
 from gridiron_playbook.point import GridironPoint
@@ -67,3 +69,9 @@ class GridironPlaybook(GridironModel):
     schemas: GridironSchemaRegistry
     root: GridironSaveRoot
     extra: tuple[int, ...]
+
+
+def export_playbook(path: Path) -> None:
+    """Export the playbook to the given path."""
+
+
