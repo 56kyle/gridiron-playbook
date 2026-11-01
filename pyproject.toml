@@ -67,5 +67,9 @@ publish-url = "https://test.pypi.org/legacy/"
 explicit = true
 
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.9.0,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+rust-src = "rust"
+manifest-path = "rust/Cargo.toml"
