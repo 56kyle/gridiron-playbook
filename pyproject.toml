@@ -71,5 +71,6 @@ requires = ["maturin>=1.9.0,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
-rust-src = "rust"
+python-source = "src"
+module-name = "gridiron_playbook.gridiron_playbook"
 manifest-path = "rust/Cargo.toml"
