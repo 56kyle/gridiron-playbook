@@ -18,6 +18,7 @@ _SLOT_RANGE = "slot must be an integer from 0 to 255"
 _NO_WAYPOINTS = "at least one waypoint"
 _TOO_FEW_POINTS = "without a known starting position"
 _BLANK_NAME = "cannot be blank"
+_REQUIRED_NODES = "remaining waypoints"
 
 
 def test_create_play(editor: PlaybookEditor) -> None:
@@ -115,3 +116,81 @@ def test_rename_play_with_unchanged_name_preserves_redo(editor: PlaybookEditor) 
     editor.rename_play(0, original_name)
 
     assert (editor.can_redo, editor.revision) == (True, 2)
+
+
+@pytest.mark.parametrize(
+    ("index", "x", "height"),
+    [(0, -10, 8), (1, 25, 12), (2, 120, 24)],
+    ids=["before-first", "between-nodes", "after-last"],
+)
+def test_insert_route_point(editor: PlaybookEditor, index: int, x: float, height: float) -> None:
+    start = GridironPoint(X_0=0, Y_0=40, Z_0=8)
+    end = GridironPoint(X_0=100, Y_0=40, Z_0=24)
+    points: tuple[GridironPoint, ...] = (start, end)
+    route: int = editor.add_route(0, 1, points)
+    original: GridironPlaybook = editor.playbook
+
+    editor.insert_route_point(0, route, index, x, 45)
+
+    inserted = GridironPoint(X_0=x, Y_0=45, Z_0=height)
+    assert editor.plays[0].routes[route].points == (*points[:index], inserted, *points[index:])
+    editor.undo()
+    assert editor.playbook == original
+
+
+@pytest.mark.parametrize(
+    ("index", "x", "error"), [(-1, 0, IndexError), (100, 0, IndexError), (0, float("nan"), ValueError)]
+)
+def test_insert_route_point_with_invalid_input(
+    editor: PlaybookEditor, index: int, x: float, error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        editor.insert_route_point(0, 0, index, x, 0)
+    assert editor.revision == 0
+
+
+def test_delete_route_point_with_duplicate_coordinates(editor: PlaybookEditor) -> None:
+    start = GridironPoint(X_0=30, Y_0=20, Z_0=5)
+    duplicate = GridironPoint(X_0=30, Y_0=20, Z_0=10)
+    end = GridironPoint(X_0=90, Y_0=40, Z_0=10)
+    route: int = editor.add_route(0, 1, (start, duplicate, end))
+    original: GridironPlaybook = editor.playbook
+
+    editor.delete_route_point(0, route, 1)
+
+    assert editor.plays[0].routes[route].points == (start, end)
+    editor.undo()
+    assert editor.playbook == original
+
+
+@pytest.mark.parametrize(("slot", "minimum"), [(1, 1), (255, 2)], ids=["formation-anchor", "unknown-slot"])
+def test_delete_route_point_at_minimum_length(editor: PlaybookEditor, slot: int, minimum: int) -> None:
+    points = tuple(GridironPoint(X_0=i, Y_0=i, Z_0=0) for i in range(minimum + 1))
+    route: int = editor.add_route(0, slot, points)
+    editor.delete_route_point(0, route, 0)
+    revision: int = editor.revision
+
+    with pytest.raises(ValueError, match=_REQUIRED_NODES):
+        editor.delete_route_point(0, route, 0)
+    assert editor.revision == revision
+    assert editor.plays[0].routes[route].points == points[1:]
+
+
+def test_add_route_block_with_midroute_node(editor: PlaybookEditor) -> None:
+    start = GridironPoint(X_0=-400, Y_0=25, Z_0=0)
+    at = GridironPoint(X_0=100, Y_0=25, Z_0=8)
+    end = GridironPoint(X_0=350, Y_0=500, Z_0=20)
+    route: int = editor.add_route(0, 1, (start, at, at, end))
+    original: GridironPlaybook = editor.playbook
+
+    editor.add_route_block(0, route, 2)
+
+    points: tuple[GridironPoint, ...] = editor.plays[0].routes[route].points
+    assert points[:3] == (start, at, at)
+    assert points[-2:] == (at, end)
+    assert len(points) > 4
+    edited: GridironPlaybook = editor.playbook
+    editor.undo()
+    assert editor.playbook == original
+    editor.redo()
+    assert editor.playbook == edited

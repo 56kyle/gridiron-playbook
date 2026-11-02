@@ -1,9 +1,11 @@
 """Edit the custom plays in a save document and retain undo history."""
 
 from collections import deque
+from math import hypot
 from math import isfinite
 from typing import TypeVar
 
+from gridiron_playbook.block import block_waypoints
 from gridiron_playbook.formations import formation_starts
 from gridiron_playbook.play import GridironPlay
 from gridiron_playbook.playbook import GridironPlaybook
@@ -33,6 +35,24 @@ def _name(value: str, field: str) -> str:
     if not trimmed:
         raise ValueError(f"{field} cannot be blank.")
     return trimmed
+
+
+def _inserted_height(points: tuple[GridironPoint, ...], index: int, x: float, y: float) -> float:
+    if not points:
+        return 0.0
+    if index == 0:
+        return points[0].z
+    previous: GridironPoint = points[index - 1]
+    if index == len(points):
+        return previous.z
+    following: GridironPoint = points[index]
+    dx, dy = following.x - previous.x, following.y - previous.y
+    length: float = hypot(dx, dy)
+    if length == 0:
+        return previous.z
+    projection: float = (x - previous.x) * (dx / length) + (y - previous.y) * (dy / length)
+    fraction: float = max(0.0, min(1.0, projection / length))
+    return (1.0 - fraction) * previous.z + fraction * following.z
 
 
 class PlaybookEditor:
@@ -129,7 +149,46 @@ class PlaybookEditor:
         if not (isfinite(x) and isfinite(y)):
             raise ValueError("Route coordinates must be finite.")
         moved: GridironPoint = GridironPoint(X_0=x, Y_0=y, Z_0=point.z)
-        edited_route: GridironRoute = route.model_copy(update={"points": _replacing(route.points, point_index, moved)})
+        self._replace_route_points(play_index, route_index, _replacing(route.points, point_index, moved))
+
+    def insert_route_point(self, play_index: int, route_index: int, point_index: int, x: float, y: float) -> None:
+        """Insert before a waypoint or append at the route length, interpolating height between saved neighbors."""
+        play: GridironPlay = _at(self.plays, play_index)
+        route: GridironRoute = _at(play.routes, route_index)
+        if not 0 <= point_index <= len(route.points):
+            raise IndexError("Choose an insertion index within the route or at its end.")
+        z: float = _inserted_height(route.points, point_index, x, y)
+        if not (isfinite(x) and isfinite(y) and isfinite(z)):
+            raise ValueError("Route coordinates must be finite.")
+        point: GridironPoint = GridironPoint(X_0=x, Y_0=y, Z_0=z)
+        self._replace_route_points(
+            play_index, route_index, (*route.points[:point_index], point, *route.points[point_index:])
+        )
+
+    def delete_route_point(self, play_index: int, route_index: int, point_index: int) -> None:
+        """Remove a saved waypoint while retaining enough points to draw the route."""
+        play: GridironPlay = _at(self.plays, play_index)
+        route: GridironRoute = _at(play.routes, route_index)
+        _ = _at(route.points, point_index)
+        minimum: int = 1 if route.slot in formation_starts(play.formation_name) else 2
+        if len(route.points) <= minimum:
+            raise ValueError("The route needs its remaining waypoints.")
+        self._replace_route_points(
+            play_index, route_index, (*route.points[:point_index], *route.points[point_index + 1 :])
+        )
+
+    def add_route_block(self, play_index: int, route_index: int, point_index: int) -> None:
+        """Insert a blocking bar at a saved waypoint as one undoable edit."""
+        play: GridironPlay = _at(self.plays, play_index)
+        route: GridironRoute = _at(play.routes, route_index)
+        start: tuple[float, float] | None = formation_starts(play.formation_name).get(route.slot)
+        stamp: tuple[GridironPoint, ...] = block_waypoints(route.points, point_index, start)
+        after: int = point_index + 1
+        self._replace_route_points(play_index, route_index, (*route.points[:after], *stamp, *route.points[after:]))
+
+    def _replace_route_points(self, play_index: int, route_index: int, points: tuple[GridironPoint, ...]) -> None:
+        play: GridironPlay = self.plays[play_index]
+        edited_route: GridironRoute = play.routes[route_index].model_copy(update={"points": points})
         edited_play: GridironPlay = play.model_copy(
             update={"routes": _replacing(play.routes, route_index, edited_route)}
         )

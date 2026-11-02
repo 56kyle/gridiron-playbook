@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+from gridiron_playbook.block import ends_with_block
 from gridiron_playbook.editor import PlaybookEditor
 from gridiron_playbook.playbook import GridironPlaybook
 from gridiron_playbook.playbook import playbook_to_sav
@@ -35,6 +36,24 @@ def test_duplicate_play_with_edited_save_round_trip(custom_plays_json: str) -> N
     edited_point: GridironPoint = duplicate.routes[0].points[1]
     assert (duplicate.play_name, edited_point.x, edited_point.y) == ("Revised sweep", revised_x, 50)
     assert reopened.root.properties.custom_plays[:-1] == original.root.properties.custom_plays
+    assert reopened.model_dump(exclude={"root": {"properties": {"custom_plays"}}}, exclude_unset=True) == (
+        original.model_dump(exclude={"root": {"properties": {"custom_plays"}}}, exclude_unset=True)
+    )
+
+
+def test_add_route_block_with_save_round_trip(custom_plays_json: str) -> None:
+    original: GridironPlaybook = GridironPlaybook.model_validate_json(custom_plays_json)
+    editor = PlaybookEditor(original)
+    last: int = len(editor.plays[0].routes[0].points) - 1
+    editor.add_route_block(0, 0, last)
+    reopened: GridironPlaybook = sav_to_playbook(playbook_to_sav(editor.playbook))
+    points: tuple[GridironPoint, ...] = reopened.root.properties.custom_plays[0].routes[0].points
+
+    assert points[: last + 1] == original.root.properties.custom_plays[0].routes[0].points
+    assert ends_with_block(points)
+    assert not ends_with_block(points[:-1])
+    assert reopened.root.properties.custom_plays[1:] == original.root.properties.custom_plays[1:]
+    assert reopened.root.properties.custom_plays[0].routes[1:] == original.root.properties.custom_plays[0].routes[1:]
     assert reopened.model_dump(exclude={"root": {"properties": {"custom_plays"}}}, exclude_unset=True) == (
         original.model_dump(exclude={"root": {"properties": {"custom_plays"}}}, exclude_unset=True)
     )
