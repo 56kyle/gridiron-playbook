@@ -12,12 +12,6 @@ from gridiron_playbook import constants
 
 
 @pytest.fixture
-def custom_plays_json() -> str:
-    source: Path = Path(__file__).parents[2] / "data" / "GridIronCustomPlays.json"
-    return source.read_text(encoding="utf-8")
-
-
-@pytest.fixture
 def temporary_log_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     module_name: str = "gridiron_playbook.log"
     with monkeypatch.context() as context:
