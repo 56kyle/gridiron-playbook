@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from math import isfinite
 from sys import float_info
 from typing import ClassVar
@@ -14,6 +15,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
 
+from gridiron_playbook.block import ends_with_block
 from gridiron_playbook.formations import formation_starts
 from gridiron_playbook.formations import position_label
 from gridiron_playbook.play import GridironPlay
@@ -91,7 +93,11 @@ class _FieldPoint(_Input):
     y: float = Field(ge=0, le=_FIELD_HEIGHT)
 
 
-class _PointMove(_FieldPoint):
+class _PositionedPoint(_FieldPoint):
+    point: int = Field(ge=0)
+
+
+class _PointSelection(_Input):
     point: int = Field(ge=0)
 
 
@@ -119,6 +125,15 @@ def _validate_event(handler: Callable[[_Event], None]) -> Callable[[_Event], Non
     return handle
 
 
+@dataclass(frozen=True)
+class RouteNodeActions:
+    """Edits available on the selected route."""
+
+    insert: Callable[[int, int, float, float], None]
+    delete: Callable[[int, int], None]
+    add_block: Callable[[int, int], None]
+
+
 class PlayDiagram(ui.element, component="play_diagram.js"):
     """Render routes and report completed edits from the current diagram."""
 
@@ -133,6 +148,8 @@ class PlayDiagram(ui.element, component="play_diagram.js"):
         on_finish: Callable[[int, tuple[GridironPoint, ...]], None],
         on_cancel: Callable[[], None],
         on_draw: Callable[[int], None] | None = None,
+        node_actions: RouteNodeActions | None = None,
+        initial_point: int | None = None,
     ) -> None:
         """Bind pointer events to routes in this snapshot of the play."""
         super().__init__()
@@ -152,10 +169,13 @@ class PlayDiagram(ui.element, component="play_diagram.js"):
                     "slot": route.slot,
                     "label": position_label(play.formation_name, route.slot),
                     "points": [transform.game_to_field(point.x, point.y) for point in route.points],
+                    "endsWithBlock": ends_with_block(route.points),
                 }
                 for route in play.routes
             ],
             selected=selected_route,
+            initialPoint=initial_point,
+            canEditNodes=node_actions is not None,
             draftSlot=draft_slot,
             draftLabel=position_label(play.formation_name, draft_slot) if draft_slot is not None else "",
             canDraw=on_draw is not None,
@@ -166,17 +186,18 @@ class PlayDiagram(ui.element, component="play_diagram.js"):
         )
         _ = self.classes("w-full")
         if draft_slot is None:
-            self._bind_route_actions(play, transform, selected_route, on_select, on_move, on_draw)
+            self._bind_route_actions(play, on_select, on_draw)
+            if selected_route is not None:
+                self._bind_point_actions(
+                    selected_route, len(play.routes[selected_route].points), transform, on_move, node_actions
+                )
         else:
             self._bind_draft_actions(draft_slot, transform, on_finish, on_cancel)
 
     def _bind_route_actions(
         self,
         play: GridironPlay,
-        transform: FieldTransform,
-        selected_route: int | None,
         on_select: Callable[[int], None],
-        on_move: Callable[[int, int, float, float], None],
         on_draw: Callable[[int], None] | None,
     ) -> None:
         def select(event: _Event) -> None:
@@ -193,16 +214,33 @@ class PlayDiagram(ui.element, component="play_diagram.js"):
             ):
                 on_draw(player.slot)
 
-        def move(event: _Event) -> None:
-            movement: _PointMove = _PointMove.model_validate(event.args)
-            if selected_route is not None and movement.point < len(play.routes[selected_route].points):
-                on_move(selected_route, movement.point, *transform.field_to_game(movement.x, movement.y))
-
         _ = self.on("route_select", _validate_event(select))
         if on_draw is not None:
             _ = self.on("route_start", _validate_event(start))
-        if selected_route is not None:
-            _ = self.on("point_move", _validate_event(move))
+
+    def _bind_point_actions(
+        self,
+        route: int,
+        point_count: int,
+        transform: FieldTransform,
+        on_move: Callable[[int, int, float, float], None],
+        node_actions: RouteNodeActions | None,
+    ) -> None:
+        def positioned(action: Callable[[int, int, float, float], None], limit: int, event: _Event) -> None:
+            position: _PositionedPoint = _PositionedPoint.model_validate(event.args)
+            if position.point < limit:
+                action(route, position.point, *transform.field_to_game(position.x, position.y))
+
+        def at_node(action: Callable[[int, int], None], event: _Event) -> None:
+            selection: _PointSelection = _PointSelection.model_validate(event.args)
+            if selection.point < point_count:
+                action(route, selection.point)
+
+        _ = self.on("point_move", _validate_event(partial(positioned, on_move, point_count)))
+        if node_actions is not None:
+            _ = self.on("point_insert", _validate_event(partial(positioned, node_actions.insert, point_count + 1)))
+            _ = self.on("point_delete", _validate_event(partial(at_node, node_actions.delete)))
+            _ = self.on("block_add", _validate_event(partial(at_node, node_actions.add_block)))
 
     def _bind_draft_actions(
         self,

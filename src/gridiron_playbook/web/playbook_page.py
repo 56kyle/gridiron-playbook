@@ -7,6 +7,7 @@ from pathlib import Path
 from nicegui import events
 from nicegui import ui
 
+from gridiron_playbook.block import route_yards_without_blocks
 from gridiron_playbook.editor import PlaybookEditor
 from gridiron_playbook.formations import FORMATION_NAMES
 from gridiron_playbook.formations import formation_starts
@@ -20,6 +21,7 @@ from gridiron_playbook.playbook import sav_to_playbook
 from gridiron_playbook.point import GridironPoint
 from gridiron_playbook.web.play_diagram import FieldTransform
 from gridiron_playbook.web.play_diagram import PlayDiagram
+from gridiron_playbook.web.play_diagram import RouteNodeActions
 
 
 _MAX_FILE_BYTES: int = 16 * 1024 * 1024
@@ -45,6 +47,10 @@ def playbook_page() -> None:
     _PlaybookPage().render()
 
 
+class _EditorWorkspace(ui.element, component="editor_workspace.js"):
+    """Scope keyboard shortcuts to the open playbook."""
+
+
 class _PlaybookPage:
     def __init__(self) -> None:
         self.container: ui.column = ui.column().classes("pb-app")
@@ -58,7 +64,7 @@ class _PlaybookPage:
         self.generation: int = 0
         self._file_chooser: ui.upload | None = None
 
-    def render(self) -> None:
+    def render(self, *, selected_point: int | None = None) -> None:
         """Replace the page controls and invalidate gestures from the old diagram."""
         self.generation += 1
         self._file_chooser = None
@@ -81,7 +87,7 @@ class _PlaybookPage:
             if self.editor is None:
                 self._welcome()
             else:
-                self._workspace(self.editor)
+                self._workspace(self.editor, selected_point)
 
     def _welcome(self) -> None:
         with ui.element("main").classes("pb-welcome"):
@@ -169,7 +175,7 @@ class _PlaybookPage:
         operation()
         self._select_play(self.play_index)
 
-    def _workspace(self, editor: PlaybookEditor) -> None:
+    def _workspace(self, editor: PlaybookEditor, selected_point: int | None) -> None:
         plays: tuple[GridironPlay, ...] = editor.plays
         formations: list[str] = sorted({p.formation_name for p in plays}, key=str.casefold)
         if self.formation not in formations:
@@ -179,7 +185,7 @@ class _PlaybookPage:
             self.play_index = visible[0]
             self.route_index = None
             self.draft_slot = None
-        with ui.element("main").classes("pb-workspace"):
+        with _EditorWorkspace().classes("pb-workspace"):
             self._library(editor, formations, visible)
             with ui.element("section").classes("pb-board").props('aria-label="Play diagram"'):
                 with ui.row().classes("pb-board-header"):
@@ -188,10 +194,22 @@ class _PlaybookPage:
                             _ = ui.label(plays[self.play_index].formation_name).classes("pb-formation")
                         _ = ui.label(plays[self.play_index].play_name if plays else "No plays yet").classes("pb-title")
                     with ui.row().classes("pb-actions"):
-                        self._icon_action("Undo", "undo", partial(self._history_change, editor.undo), editor.can_undo)
-                        self._icon_action("Redo", "redo", partial(self._history_change, editor.redo), editor.can_redo)
+                        self._history_button(
+                            "Undo",
+                            partial(self._history_change, editor.undo),
+                            editor.can_undo and self.draft_slot is None,
+                            "Control+Z Meta+Z",
+                            "Ctrl/⌘+Z",
+                        )
+                        self._history_button(
+                            "Redo",
+                            partial(self._history_change, editor.redo),
+                            editor.can_redo and self.draft_slot is None,
+                            "Control+Shift+Z Meta+Shift+Z Control+Y",
+                            "Ctrl/⌘+Shift+Z or Ctrl+Y",
+                        )
                 if plays:
-                    self._diagram(editor, plays[self.play_index], self.play_index)
+                    self._diagram(editor, plays[self.play_index], self.play_index, selected_point)
                 else:
                     _ = ui.icon("route").classes("pb-empty-diagram")
             if plays:
@@ -250,9 +268,12 @@ class _PlaybookPage:
             filter_plays()
 
     @staticmethod
-    def _icon_action(label: str, icon: str, action: Callable[[], None], enabled: bool = True) -> None:
-        button: ui.button = ui.button(icon=icon, on_click=action).props(f'flat dense round aria-label="{label}"')
-        _ = button.tooltip(label)
+    def _history_button(label: str, action: Callable[[], None], enabled: bool, keys: str, hint: str) -> None:
+        icon: str = label.lower()
+        button: ui.button = ui.button(icon=icon, on_click=action).props(
+            f'flat dense round aria-label="{label}" aria-keyshortcuts="{keys}" data-history="{icon}"'
+        )
+        _ = button.tooltip(f"{label} ({hint})")
         _ = button.set_enabled(enabled)
 
     def _inspector(self, editor: PlaybookEditor, play: GridironPlay) -> None:
@@ -285,13 +306,19 @@ class _PlaybookPage:
 
     def _lineup_row(self, play: GridironPlay, slot: int, route_index: int | None) -> None:
         position: str = position_label(play.formation_name, slot)
+        yardage: str | None = None
         if route_index is None:
             button: ui.button = ui.button(on_click=partial(self._start_drawing, slot))
             _ = button.props(f'aria-label="Draw route for {position}, slot {slot}"').classes("pb-unassigned")
+            tooltip: str = f"Draw route · Slot {slot}"
         else:
             button = ui.button(on_click=partial(self._select_route, route_index))
             selected: bool = route_index == self.route_index
-            label: str = f"Select {position}, slot {slot}, route {route_index + 1}"
+            start: tuple[float, float] | None = formation_starts(play.formation_name).get(slot)
+            yards: str = f"{route_yards_without_blocks(play.routes[route_index], start):.0f}"
+            yardage = "1 yd" if yards == "1" else f"{yards} yds"
+            label: str = f"Select {position}, slot {slot}, route {route_index + 1}, {yardage}"
+            tooltip = f"Slot {slot}" if start is not None else f"Slot {slot} · Distance from first saved point"
             _ = button.props(
                 f'aria-label="{label}" aria-pressed="{str(selected).lower()}" data-testid="route-{route_index}"'
             )
@@ -300,12 +327,11 @@ class _PlaybookPage:
         with button.props(f'flat no-caps data-position="{position}"').classes("pb-route"):
             _ = ui.element("span").classes("pb-dot").props("aria-hidden=true")
             _ = ui.label(position).classes("pb-route-name")
-            if route_index is None:
+            if yardage is None:
                 _ = ui.icon("add").classes("pb-route-add")
             else:
-                count: int = len(play.routes[route_index].points)
-                _ = ui.label(f"{count} pt" if count == 1 else f"{count} pts").classes("pb-route-points")
-        _ = button.tooltip(f"Draw route · Slot {slot}" if route_index is None else f"Slot {slot}")
+                _ = ui.label(yardage).classes("pb-route-yardage")
+        _ = button.tooltip(tooltip)
 
     def _start_drawing(self, slot: int) -> None:
         self.draft_slot = slot
@@ -317,16 +343,17 @@ class _PlaybookPage:
         self.draft_slot = None
         self.render()
 
-    def _diagram(self, editor: PlaybookEditor, play: GridironPlay, index: int) -> None:
+    def _diagram(self, editor: PlaybookEditor, play: GridironPlay, index: int, selected_point: int | None) -> None:
         generation: int = self.generation
 
         def select(route: int) -> None:
             if generation == self.generation and 0 <= route < len(play.routes):
                 self._select_route(route)
 
+        edit_point = partial(self._edit_point, generation)
+
         def move(route: int, point: int, x: float, y: float) -> None:
-            if generation == self.generation and route == self.route_index:
-                self._move_point(editor, index, route, point, x, y)
+            edit_point(route, point, partial(editor.move_route_point, index, route, point, x, y))
 
         def finish(slot: int, points: tuple[GridironPoint, ...]) -> None:
             if generation == self.generation and slot == self.draft_slot:
@@ -340,6 +367,8 @@ class _PlaybookPage:
             play,
             selected_route=self.route_index,
             draft_slot=self.draft_slot,
+            initial_point=selected_point,
+            node_actions=self._node_actions(editor, index, play, edit_point),
             on_select=select,
             on_move=move,
             on_finish=finish,
@@ -347,16 +376,38 @@ class _PlaybookPage:
             on_draw=partial(self._draw_from_diagram, generation, play),
         )
 
+    def _edit_point(self, generation: int, route: int, selection: int, operation: Callable[[], None]) -> None:
+        if generation != self.generation or route != self.route_index:
+            return
+        try:
+            operation()
+        except (IndexError, ValueError) as error:
+            ui.notify(str(error), type="negative")
+            return
+        self.render(selected_point=selection)
+
+    @staticmethod
+    def _node_actions(
+        editor: PlaybookEditor,
+        index: int,
+        play: GridironPlay,
+        edit_point: Callable[[int, int, Callable[[], None]], None],
+    ) -> RouteNodeActions:
+        def insert(route: int, point: int, x: float, y: float) -> None:
+            edit_point(route, point, partial(editor.insert_route_point, index, route, point, x, y))
+
+        def delete(route: int, point: int) -> None:
+            next_point: int = min(point, len(play.routes[route].points) - 2)
+            edit_point(route, next_point, partial(editor.delete_route_point, index, route, point))
+
+        def add_block(route: int, point: int) -> None:
+            edit_point(route, point, partial(editor.add_route_block, index, route, point))
+
+        return RouteNodeActions(insert=insert, delete=delete, add_block=add_block)
+
     def _draw_from_diagram(self, generation: int, play: GridironPlay, slot: int) -> None:
         if generation == self.generation and slot in formation_starts(play.formation_name):
             self._start_drawing(slot)
-
-    def _move_point(self, editor: PlaybookEditor, index: int, route: int, point: int, x: float, y: float) -> None:
-        try:
-            editor.move_route_point(index, route, point, x, y)
-        except (IndexError, ValueError) as error:
-            ui.notify(str(error), type="negative")
-        self.render()
 
     def _finish_route(self, editor: PlaybookEditor, index: int, slot: int, points: tuple[GridironPoint, ...]) -> None:
         try:

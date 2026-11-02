@@ -154,8 +154,9 @@ body, body.body--dark {
 .pb-title { color: var(--pb-ink); font-size: clamp(1.65rem, 2.6vw, 3rem); line-height: 1.08; font-weight: 730; letter-spacing: -.055em; overflow-wrap: anywhere; }
 .pb-board-header .pb-actions { gap: .15rem; }
 .pb-empty-diagram { display: grid; min-height: 16rem; place-items: center; width: 100%; color: var(--pb-muted); background: var(--pb-field); font-size: 3rem; }
+.pb-node-tools, .pb-draft-tools { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .65rem 0; }
 .pb-inspector { grid-area: inspector; background: var(--pb-panel); border: 1px solid var(--pb-line); border-width: 0 0 1px 1px; border-radius: 0 0 0 8px; }
-.pb-count, .pb-route-points { font-size: .78rem; color: var(--pb-muted); font-variant-numeric: tabular-nums; }
+.pb-count, .pb-route-yardage { font-size: .78rem; color: var(--pb-muted); font-variant-numeric: tabular-nums; }
 .pb-inspector .pb-section-title { margin-bottom: .9rem; }
 .pb-app .pb-route {
     width: 100%; display: flex; margin: .14rem 0; padding: .62rem .6rem;
@@ -166,7 +167,7 @@ body, body.body--dark {
 .pb-dot { flex: none; width: .65rem; height: .65rem; border-radius: 50%; background: var(--pb-position-color); }
 .pb-unassigned .pb-dot { border: 1px solid var(--pb-position-color); background: transparent; }
 .pb-route-name { font-weight: 650; }
-.pb-route-points, .pb-route-add { margin-left: auto; }
+.pb-route-yardage, .pb-route-add { margin-left: auto; }
 .pb-route-add { color: var(--pb-muted); font-size: 1rem; }
 .pb-draw { width: 100%; margin: 1rem 0; }
 .pb-play-actions { justify-content: space-between; border-top: 1px solid var(--pb-line); padding-top: .8rem; gap: .15rem; }

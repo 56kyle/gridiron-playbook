@@ -1,12 +1,39 @@
-// The lineup comes from the game's formation data; points are the editable save data.
+function insertionOnRoute(points, origin, x, y, hitRadius) {
+  let nearest = {point: points.length, x, y};
+  let bestDistance = hitRadius;
+  for (let index = origin ? 0 : 1; index < points.length; index++) {
+    const start = points[index - 1] ?? origin;
+    const dx = points[index][0] - start[0], dy = points[index][1] - start[1];
+    const lengthSquared = dx * dx + dy * dy;
+    if (!lengthSquared) continue;
+    const t = ((x - start[0]) * dx + (y - start[1]) * dy) / lengthSquared;
+    if (t < 0 || t > 1) continue;
+    const px = start[0] + t * dx, py = start[1] + t * dy;
+    const distance = Math.hypot(x - px, y - py);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      nearest = {point: index, x: px, y: py};
+    }
+  }
+  return nearest;
+}
+
 export default {
   props: {
-    lineup: Array, routes: Array, selected: Number, draftSlot: Number, draftLabel: String,
-    fieldWidth: Number, fieldHeight: Number, diagramId: Number, originY: Number, canDraw: Boolean,
+    lineup: Array, routes: Array, selected: Number, initialPoint: Number, draftSlot: Number, draftLabel: String,
+    fieldWidth: Number, fieldHeight: Number, diagramId: Number, originY: Number, canDraw: Boolean, canEditNodes: Boolean,
   },
-  emits: ['route_select', 'route_start', 'point_move', 'route_finish', 'route_cancel'],
+  emits: ['route_select', 'route_start', 'point_move', 'point_insert', 'point_delete', 'block_add', 'route_finish', 'route_cancel'],
   data() {
-    return { drag: null, draft: [] };
+    return {
+      drag: null, draft: [], undonePoints: [], previewPoint: null,
+      activePoint: this.initialPoint ?? null, addingNode: false, insertion: null,
+    };
+  },
+  mounted() {
+    if (this.initialPoint != null && document.activeElement === document.body) {
+      this.$refs.field.focus({preventScroll: true});
+    }
   },
   computed: {
     drawing() { return this.draftSlot != null; },
@@ -18,7 +45,14 @@ export default {
       return indices;
     },
     draftOrigin() { return this.origin(this.draftSlot); },
+    previewStart() { return this.draft.at(-1) ?? this.draftOrigin; },
     minDraftPoints() { return this.draftOrigin ? 1 : 2; },
+    selectedRoute() { return this.routes[this.selected]; },
+    extensionStart() { return this.selectedRoute.points.at(-1) ?? this.origin(this.selectedRoute.slot); },
+    blockTarget() { return this.activePoint ?? this.selectedRoute.points.length - 1; },
+    canDeleteNode() {
+      return this.activePoint !== null && this.selectedRoute.points.length > (this.origin(this.selectedRoute.slot) ? 1 : 2);
+    },
   },
   methods: {
     origin(slot) {
@@ -36,27 +70,49 @@ export default {
       if (this.routes[this.selected]?.slot === slot) return this.selected;
       return this.routes.findIndex(route => route.slot === slot);
     },
-    playerWidth(label) { return Math.max(27, label.length * 8.5 + 12); },
+    markerLabel(label) { return label === 'WR-L' || label === 'WR-R' ? 'WR' : label; },
+    playerWidth(label) { return Math.max(27, this.markerLabel(label).length * 8.5 + 12); },
     selectRoute(index) {
-      if (!this.drawing && index !== this.selected) this.$emit('route_select', {route: index});
+      if (!this.drawing && !this.addingNode && index !== this.selected) this.$emit('route_select', {route: index});
     },
     selectPlayer(slot) {
-      if (this.drawing) return;
+      if (this.drawing || this.addingNode) return;
       const route = this.playerRoute(slot);
       if (route !== -1) this.selectRoute(route);
       else if (this.canDraw) this.$emit('route_start', {slot});
     },
-    fieldPosition(event) {
+    fieldPosition(clientX, clientY) {
       const matrix = this.$refs.field.getScreenCTM();
       if (!matrix) return null;
-      const p = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
+      const p = new DOMPoint(clientX, clientY).matrixTransform(matrix.inverse());
       return [Math.min(this.fieldWidth, Math.max(0, p.x)), Math.min(this.fieldHeight, Math.max(0, p.y))];
     },
+    draftPosition(event) {
+      // Click events report whole CSS pixels even when pointer movement has subpixel precision.
+      return this.fieldPosition(Math.floor(event.clientX), Math.floor(event.clientY));
+    },
+    insertionAt(event) {
+      const position = this.draftPosition(event);
+      if (!position) return null;
+      const matrix = this.$refs.field.getScreenCTM();
+      const hitRadius = 12 / Math.hypot(matrix.a, matrix.b);
+      return insertionOnRoute(this.selectedRoute.points, this.origin(this.selectedRoute.slot), ...position, hitRadius);
+    },
+    toggleAddNode() {
+      this.addingNode = !this.addingNode;
+      this.insertion = null;
+      this.$refs.field.focus({preventScroll: true});
+    },
+    deleteNode() {
+      if (this.canDeleteNode) this.$emit('point_delete', {point: this.activePoint});
+    },
     startDrag(event, index) {
-      if (this.drawing || this.drag || event.button !== 0 || !event.isPrimary) return;
+      if (this.drawing || this.addingNode || this.drag || event.button !== 0 || !event.isPrimary) return;
       const point = this.routes[this.selected].points[index];
-      const pointer = this.fieldPosition(event);
+      const pointer = this.fieldPosition(event.clientX, event.clientY);
       if (!pointer) return;
+      this.$refs.field.focus({preventScroll: true});
+      if (this.canEditNodes) this.activePoint = index;
       this.$refs.field.setPointerCapture(event.pointerId);
       this.drag = {
         index, pointerId: event.pointerId, position: point, start: point,
@@ -65,12 +121,22 @@ export default {
     },
     moveDrag(event) {
       if (!this.drag || event.pointerId !== this.drag.pointerId) return;
-      const pointer = this.fieldPosition(event);
+      const pointer = this.fieldPosition(event.clientX, event.clientY);
       if (!pointer) return;
       this.drag.position = [
         Math.min(this.fieldWidth, Math.max(0, pointer[0] + this.drag.offset[0])),
         Math.min(this.fieldHeight, Math.max(0, pointer[1] + this.drag.offset[1])),
       ];
+    },
+    movePointer(event) {
+      if (!event.isPrimary) return;
+      if (this.drawing) this.previewPoint = this.draftPosition(event);
+      else if (this.addingNode) this.insertion = this.insertionAt(event);
+      else this.moveDrag(event);
+    },
+    clearPreview() {
+      this.previewPoint = null;
+      this.insertion = null;
     },
     endDrag(event) {
       if (!this.drag || event.pointerId !== this.drag.pointerId) return;
@@ -87,24 +153,73 @@ export default {
       this.drag = null;
       if (this.$refs.field.hasPointerCapture(pointerId)) this.$refs.field.releasePointerCapture(pointerId);
     },
-    addDraftPoint(event) {
-      if (!this.drawing || event.button !== 0) return;
-      const point = this.fieldPosition(event);
-      if (point) this.draft.push(point);
+    placePoint(event) {
+      if (event.button !== 0) return;
+      if (this.addingNode) {
+        const insertion = this.insertionAt(event);
+        if (insertion) {
+          this.addingNode = false;
+          this.insertion = null;
+          this.$emit('point_insert', insertion);
+        }
+        return;
+      }
+      if (!this.drawing) return;
+      const point = this.draftPosition(event);
+      if (!point) return;
+      this.draft.push(point);
+      this.undonePoints = [];
+      this.previewPoint = null;
+    },
+    undoPoint() {
+      if (this.draft.length) this.undonePoints.push(this.draft.pop());
+    },
+    redoPoint() {
+      if (this.undonePoints.length) this.draft.push(this.undonePoints.pop());
+    },
+    cancelDraft() {
+      this.previewPoint = null;
+      this.$emit('route_cancel');
+    },
+    handleShortcut(event) {
+      if (this.drawing) {
+        switch (event.detail) {
+          case 'remove-point':
+          case 'undo': this.undoPoint(); break;
+          case 'redo': this.redoPoint(); break;
+          case 'finish': this.finishDraft(); break;
+          case 'cancel': this.cancelDraft(); break;
+          default: return;
+        }
+      } else if (this.drag && event.detail === 'cancel') {
+        this.cancelDrag();
+      } else if (this.addingNode && event.detail === 'cancel') {
+        this.toggleAddNode();
+      } else if (this.activePoint !== null && event.detail === 'cancel') {
+        this.activePoint = null;
+      } else if (event.detail === 'delete-node' && !this.drag && !this.addingNode && this.activePoint !== null &&
+                 this.$el.contains(document.activeElement)) {
+        this.deleteNode();
+      } else {
+        return;
+      }
+      event.preventDefault();
     },
     finishDraft() {
       if (this.drawing && this.draft.length >= this.minDraftPoints) {
+        this.previewPoint = null;
         this.$emit('route_finish', {points: this.draft.map(([x, y]) => ({x, y}))});
       }
     },
   },
   template: `
-    <section class="play-diagram" aria-label="Play diagram" @keydown.esc="drawing ? $emit('route_cancel') : cancelDrag()">
+    <section class="play-diagram" aria-label="Play diagram" @playbook-shortcut="handleShortcut">
       <svg ref="field" class="play-field" data-testid="play-field" role="group" aria-label="Route editing field" tabindex="0"
            :viewBox="'0 0 ' + fieldWidth + ' ' + fieldHeight"
            style="width:100%;display:block;background:var(--pb-field);touch-action:none;user-select:none"
-           :style="{cursor: drawing ? 'crosshair' : 'default'}" @click="addDraftPoint"
-           @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="cancelDrag" @lostpointercapture="cancelDrag">
+           :style="{cursor: drawing || addingNode ? 'crosshair' : 'default'}" @click="placePoint"
+           @pointermove="movePointer" @pointerleave="clearPreview" @pointerup="endDrag"
+           @pointercancel="clearPreview(); cancelDrag()" @lostpointercapture="cancelDrag">
         <defs>
           <pattern :id="patternId" :width="fieldWidth" height="96" patternUnits="userSpaceOnUse" :y="originY">
             <rect :width="fieldWidth" height="96" fill="var(--pb-field)"/>
@@ -126,7 +241,7 @@ export default {
         </g>
 
         <g v-for="index in routeOrder" :key="'r'+index" :data-route-index="index" :data-position="routes[index].label"
-           role="button" :tabindex="drawing ? -1 : 0" :aria-label="'Select '+routes[index].label+', slot '+routes[index].slot+', route '+(index+1)"
+           role="button" :tabindex="drawing || addingNode ? -1 : 0" :aria-label="'Select '+routes[index].label+', slot '+routes[index].slot+', route '+(index+1)"
            :aria-pressed="index === selected" @click="selectRoute(index)" @keydown.enter.prevent="selectRoute(index)"
            @keydown.space.prevent="selectRoute(index)" :style="{cursor: drawing ? 'crosshair' : 'pointer'}"
            :opacity="drawing || (selected != null && index !== selected) ? .62 : 1">
@@ -134,25 +249,28 @@ export default {
                     stroke-width="24" pointer-events="stroke" stroke-linecap="round" stroke-linejoin="round"/>
           <polyline :points="polyline(points(index), origin(routes[index].slot))" fill="none" stroke="var(--pb-position-color)"
                     :stroke-width="index === selected ? 4 : 3" stroke-linecap="round" stroke-linejoin="round"
-                    :marker-end="points(index).length ? 'url(#'+arrowId+')' : undefined"/>
+                    :marker-end="points(index).length && !routes[index].endsWithBlock ? 'url(#'+arrowId+')' : undefined"/>
           <g v-if="!origin(routes[index].slot) && points(index).length" data-first-waypoint-label
              :transform="'translate('+points(index)[0].join(' ')+')'">
             <title>First saved point · {{routes[index].label}}</title>
             <circle r="4" fill="var(--pb-position-color)"/>
             <text x="9" y="-9" font-size="15" font-weight="700" paint-order="stroke" stroke="var(--pb-field)"
-                  stroke-width="4" fill="var(--pb-position-color)">{{routes[index].label}}</text>
+                  stroke-width="4" fill="var(--pb-position-color)">{{markerLabel(routes[index].label)}}</text>
           </g>
         </g>
 
         <g v-if="drawing" :data-position="draftLabel" pointer-events="none">
-          <polyline :points="polyline(draft, draftOrigin)" fill="none" stroke="var(--pb-position-color)"
-                    stroke-width="3.5" stroke-linecap="round" stroke-dasharray="7 5"/>
+          <polyline data-draft-path :points="polyline(draft, draftOrigin)" fill="none" stroke="var(--pb-position-color)"
+                    stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <line v-if="previewStart && previewPoint" data-draft-preview :x1="previewStart[0]" :y1="previewStart[1]"
+                :x2="previewPoint[0]" :y2="previewPoint[1]" stroke="var(--pb-position-color)"
+                stroke-width="3.5" stroke-linecap="round" stroke-dasharray="7 5"/>
           <circle v-for="(p,i) in draft" :key="i" :cx="p[0]" :cy="p[1]" r="5.5"
                   fill="var(--pb-position-color)" stroke="var(--pb-field)" stroke-width="2"/>
         </g>
 
         <g v-for="player in lineup" :key="'s'+player.slot" :data-lineup-slot="player.slot" :data-position="player.label"
-           :transform="'translate('+player.at.join(' ')+')'" role="button" :tabindex="drawing ? -1 : 0"
+           :transform="'translate('+player.at.join(' ')+')'" role="button" :tabindex="drawing || addingNode ? -1 : 0"
            :aria-label="(playerRoute(player.slot) < 0 ? 'Draw ' : 'Select ') + player.label + ' route, slot ' + player.slot"
            @click="selectPlayer(player.slot)" @keydown.enter.prevent="selectPlayer(player.slot)" @keydown.space.prevent="selectPlayer(player.slot)"
            :style="{cursor: drawing ? 'crosshair' : 'pointer'}"
@@ -161,23 +279,50 @@ export default {
           <rect :x="-playerWidth(player.label)/2" y="-13" :width="playerWidth(player.label)" height="26" rx="12"
                 fill="var(--pb-input)" stroke="var(--pb-position-color)"
                 :stroke-width="player.slot === draftSlot || playerRoute(player.slot) === selected ? 3 : 1.75"/>
-          <text text-anchor="middle" dy="5" font-size="14" font-weight="750" fill="var(--pb-ink)">{{player.label}}</text>
+          <text text-anchor="middle" dy="5" font-size="14" font-weight="750" fill="var(--pb-ink)">{{markerLabel(player.label)}}</text>
         </g>
 
-        <g v-if="selected != null && routes[selected] && !drawing" :data-position="routes[selected].label">
+        <g v-if="selectedRoute && !drawing" :data-position="selectedRoute.label">
           <g v-for="(p,j) in points(selected)" :key="j" :transform="'translate('+p.join(' ')+')'" :data-point-index="j"
-             style="cursor:grab" @pointerdown.stop.prevent="startDrag($event,j)">
-            <title>{{routes[selected].label}} · Point {{j+1}}</title>
+             :role="canEditNodes ? 'button' : undefined" :tabindex="canEditNodes && !addingNode ? 0 : -1"
+             :aria-label="'Select node '+(j+1)" :aria-pressed="activePoint === j"
+             style="cursor:grab" @pointerdown.stop.prevent="startDrag($event,j)"
+             @focus="canEditNodes && (activePoint = j)" @click="canEditNodes && (activePoint = j)"
+             @keydown.enter.prevent="canEditNodes && (activePoint = j)"
+             @keydown.space.prevent="canEditNodes && (activePoint = j)">
+            <title>{{selectedRoute.label}} · Node {{j+1}}</title>
             <circle r="12" fill="transparent"/>
-            <circle r="5.75" fill="var(--pb-field)" stroke="var(--pb-position-color)" stroke-width="2.5"/>
+            <circle :r="activePoint === j ? 6 : 4" :fill="activePoint === j ? 'var(--pb-position-color)' : 'var(--pb-field)'"
+                    :stroke="activePoint === j ? 'var(--pb-ink)' : 'var(--pb-position-color)'" stroke-width="2"/>
+          </g>
+        </g>
+        <g v-if="addingNode" :data-position="selectedRoute.label">
+          <rect width="100%" height="100%" fill="transparent"/>
+          <g v-if="insertion" pointer-events="none" stroke="var(--pb-position-color)">
+            <line v-if="insertion.point === selectedRoute.points.length && extensionStart" :x1="extensionStart[0]" :y1="extensionStart[1]"
+                  :x2="insertion.x" :y2="insertion.y" stroke-width="3" stroke-dasharray="7 5"/>
+            <circle :cx="insertion.x" :cy="insertion.y" r="5.5" fill="var(--pb-field)" stroke-width="2.5"/>
           </g>
         </g>
       </svg>
-      <div v-if="drawing" class="pb-draft-tools" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;padding:.65rem 0">
+      <div v-if="drawing" class="pb-draft-tools">
         <strong aria-live="polite">{{draftLabel}} · {{draft.length}} {{draft.length === 1 ? 'point' : 'points'}}</strong>
-        <q-btn flat dense no-caps label="Undo point" :disable="!draft.length" @click="draft.pop()"/>
-        <q-btn unelevated no-caps color="primary" label="Finish route" :disable="draft.length < minDraftPoints" @click="finishDraft"/>
-        <q-btn flat dense no-caps label="Cancel" @click="$emit('route_cancel')"/>
+        <q-btn flat dense no-caps label="Undo point" :disable="!draft.length" @click="undoPoint"
+               aria-keyshortcuts="Control+Z Meta+Z Backspace" title="Undo point (Ctrl/⌘+Z or Backspace)"/>
+        <q-btn flat dense no-caps label="Redo point" :disable="!undonePoints.length" @click="redoPoint"
+               aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y" title="Redo point (Ctrl/⌘+Shift+Z or Ctrl+Y)"/>
+        <q-btn unelevated no-caps color="primary" label="Finish route" :disable="draft.length < minDraftPoints"
+               @click="finishDraft" aria-keyshortcuts="Enter" title="Finish route (Enter)"/>
+        <q-btn flat dense no-caps label="Cancel" @click="cancelDraft" aria-keyshortcuts="Escape" title="Cancel (Esc)"/>
+      </div>
+      <div v-else-if="selectedRoute && canEditNodes" class="pb-node-tools" role="group" aria-label="Edit route">
+        <q-btn dense no-caps label="Add node" :flat="!addingNode" :unelevated="addingNode" :color="addingNode ? 'primary' : undefined"
+               :aria-pressed="addingNode" @click="toggleAddNode" title="Click a segment to insert a node or open field to extend the route"/>
+        <q-btn flat dense no-caps label="Delete node" :disable="addingNode || !canDeleteNode" @click="deleteNode"
+               aria-keyshortcuts="Delete" title="Delete the selected node (Delete)"/>
+        <q-btn flat dense no-caps label="Add block" :disable="addingNode || blockTarget < 0"
+               @click="$emit('block_add', {point: blockTarget})"
+               :title="activePoint === null ? 'Add a block at the end of the route' : 'Add a block at node '+(activePoint+1)"/>
       </div>
     </section>
   `,
