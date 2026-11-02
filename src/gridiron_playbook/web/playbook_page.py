@@ -8,6 +8,10 @@ from nicegui import events
 from nicegui import ui
 
 from gridiron_playbook.editor import PlaybookEditor
+from gridiron_playbook.formations import FORMATION_NAMES
+from gridiron_playbook.formations import formation_starts
+from gridiron_playbook.formations import observed_route_slots
+from gridiron_playbook.formations import position_label
 from gridiron_playbook.play import GridironPlay
 from gridiron_playbook.playbook import GridironPlaybook
 from gridiron_playbook.playbook import json_to_playbook
@@ -37,7 +41,6 @@ def _decode_uploaded_playbook(name: str, contents: bytes) -> GridironPlaybook:
 
 def playbook_page() -> None:
     """Build a private editor for this page instance."""
-    _ = ui.colors(primary="#16634c")
     ui.add_css(Path(__file__).with_name("editor.css").read_text(encoding="utf-8"))
     _PlaybookPage().render()
 
@@ -48,6 +51,7 @@ class _PlaybookPage:
         self.editor: PlaybookEditor | None = None
         self.filename: str = ""
         self.formation: str | None = None
+        self.search: str = ""
         self.play_index: int = 0
         self.route_index: int | None = None
         self.draft_slot: int | None = None
@@ -64,15 +68,16 @@ class _PlaybookPage:
                 with ui.row().classes("pb-brand"):
                     _ = ui.icon("sports_football").classes("pb-brand-icon")
                     _ = ui.label("Gridiron").classes("pb-brand-name")
-                    _ = ui.label("Playbook editor").classes("pb-brand-section")
+                    if self.filename:
+                        _ = ui.label(self.filename).classes("pb-file")
                 if self.editor is not None:
                     with ui.row().classes("pb-actions"):
-                        _ = ui.button(
-                            "Open playbook", icon="folder_open", color="white", on_click=self._open_dialog
-                        ).props("flat no-caps")
-                        _ = ui.button(
-                            "Download .sav", icon="download", color="light-green-3", on_click=self._download
-                        ).props("unelevated no-caps text-color=green-10")
+                        _ = ui.button("Open playbook", icon="folder_open", on_click=self._open_dialog).props(
+                            "flat no-caps"
+                        )
+                        _ = ui.button("Download .sav", icon="download", on_click=self._download).props(
+                            "unelevated no-caps"
+                        )
             if self.editor is None:
                 self._welcome()
             else:
@@ -80,13 +85,9 @@ class _PlaybookPage:
 
     def _welcome(self) -> None:
         with ui.element("main").classes("pb-welcome"):
-            _ = ui.label("PLAYBOOK EDITOR").classes("pb-eyebrow")
+            _ = ui.icon("route").classes("pb-welcome-icon")
             _ = ui.label("Open your playbook").classes("pb-display")
-            _ = ui.label("Choose a Gridiron save or its JSON export to draw routes and create plays.").classes(
-                "pb-lede"
-            )
             self._upload_control()
-            _ = ui.label("Download an edited copy when you're ready to use it.").classes("pb-muted")
 
     def _open_dialog(self) -> None:
         with ui.dialog() as dialog, ui.card().classes("pb-dialog"):
@@ -125,6 +126,7 @@ class _PlaybookPage:
             self.editor = PlaybookEditor(document)
             self.filename = name
             self.formation = None
+            self.search = ""
             if dialog is not None:
                 _ = dialog.close()
             self._select_play(0)
@@ -178,70 +180,137 @@ class _PlaybookPage:
             self.route_index = None
             self.draft_slot = None
         with ui.element("main").classes("pb-workspace"):
-            with ui.column().classes("pb-sidebar"):
-                _ = ui.label("PLAYBOOK").classes("pb-eyebrow")
-                _ = ui.label(self.filename).classes("pb-file")
-                _ = ui.label(f"{len(plays)} plays · {len(formations)} formations").classes("pb-muted")
-                _ = ui.separator()
-                with ui.dropdown_button(self.formation or "All formations", auto_close=True).props("outline no-caps"):
-                    _ = ui.item("All formations", on_click=partial(self._set_filter, None))
-                    for formation in formations:
-                        _ = ui.item(formation, on_click=partial(self._set_filter, formation))
-                with ui.column().classes("pb-plays"):
-                    for i in visible:
-                        label: str = plays[i].play_name or "(Unnamed play)"
-                        button: ui.button = ui.button(label, on_click=partial(self._select_play, i))
-                        _ = button.props("flat no-caps align=left").classes("pb-play-button")
-                        if i == self.play_index:
-                            _ = button.classes("pb-active").props('aria-current="true"')
-                _ = ui.button("New play", icon="add", on_click=partial(self._new_play_dialog, editor)).props(
-                    "outline no-caps"
-                )
-            with ui.column().classes("pb-board"):
+            self._library(editor, formations, visible)
+            with ui.element("section").classes("pb-board").props('aria-label="Play diagram"'):
                 with ui.row().classes("pb-board-header"):
                     with ui.column().classes("pb-title-group"):
-                        _ = ui.label(plays[self.play_index].formation_name if plays else "PLAYBOOK").classes(
-                            "pb-eyebrow"
-                        )
+                        if plays:
+                            _ = ui.label(plays[self.play_index].formation_name).classes("pb-formation")
                         _ = ui.label(plays[self.play_index].play_name if plays else "No plays yet").classes("pb-title")
                     with ui.row().classes("pb-actions"):
-                        undo: ui.button = ui.button(
-                            "Undo", icon="undo", on_click=partial(self._history_change, editor.undo)
-                        )
-                        redo: ui.button = ui.button(
-                            "Redo", icon="redo", on_click=partial(self._history_change, editor.redo)
-                        )
-                        _ = undo.props("flat no-caps").set_enabled(editor.can_undo)
-                        _ = redo.props("flat no-caps").set_enabled(editor.can_redo)
+                        self._icon_action("Undo", "undo", partial(self._history_change, editor.undo), editor.can_undo)
+                        self._icon_action("Redo", "redo", partial(self._history_change, editor.redo), editor.can_redo)
                 if plays:
-                    self._play_tools(editor, plays[self.play_index])
+                    self._diagram(editor, plays[self.play_index], self.play_index)
                 else:
-                    _ = ui.label("Create a play to start drawing routes.").classes("pb-muted")
+                    _ = ui.icon("route").classes("pb-empty-diagram")
+            if plays:
+                self._inspector(editor, plays[self.play_index])
 
-    def _play_tools(self, editor: PlaybookEditor, play: GridironPlay) -> None:
-        index: int = self.play_index
-        with ui.row().classes("pb-actions"):
-            _ = ui.button("Draw route", icon="gesture", on_click=partial(self._draw_dialog, play)).props(
-                "unelevated no-caps"
+    def _library(self, editor: PlaybookEditor, formations: list[str], visible: list[int]) -> None:
+        with ui.element("nav").classes("pb-library").props('aria-label="Play library"'):
+            with ui.row().classes("pb-section-title"):
+                _ = ui.label("Plays").classes("pb-section-name")
+                _ = (
+                    ui.button("New play", icon="add", on_click=partial(self._new_play_dialog, editor))
+                    .props("flat dense no-caps")
+                    .classes("pb-create-play")
+                )
+            search: ui.input = (
+                ui.input(placeholder="Find a play", value=self.search)
+                .props('dense outlined clearable aria-label="Find a play"')
+                .classes("pb-search")
             )
-            _ = ui.button(
-                "Duplicate", icon="content_copy", on_click=partial(self._duplicate_dialog, editor, index)
-            ).props("outline no-caps")
-            _ = ui.button("Rename", icon="edit", on_click=partial(self._rename_dialog, editor, index)).props(
-                "flat no-caps"
+            with search.add_slot("prepend"):
+                _ = ui.icon("search")
+            with (
+                ui.dropdown_button(self.formation or "All formations", auto_close=True)
+                .props("flat dense no-caps align=between")
+                .classes("pb-filter")
+            ):
+                _ = ui.item("All formations", on_click=partial(self._set_filter, None))
+                for formation in formations:
+                    _ = ui.item(formation, on_click=partial(self._set_filter, formation))
+            listing: ui.column = ui.column().classes("pb-plays")
+
+            def filter_plays() -> None:
+                self.search = search.value or ""
+                query: str = self.search.strip().casefold()
+                groups: dict[str, list[int]] = {}
+                for index in visible:
+                    play: GridironPlay = editor.plays[index]
+                    if query in play.play_name.casefold() or query in play.formation_name.casefold():
+                        groups.setdefault(play.formation_name, []).append(index)
+                _ = listing.clear()
+                with listing:
+                    if not groups:
+                        _ = ui.label("No matches" if query else "No plays").classes("pb-list-empty")
+                    for formation, indices in groups.items():
+                        with ui.column().classes("pb-group"):
+                            if self.formation is None and len(formations) > 1:
+                                _ = ui.label(formation).classes("pb-group-name")
+                            for index in indices:
+                                name: str = editor.plays[index].play_name or "(Unnamed play)"
+                                button: ui.button = ui.button(name, on_click=partial(self._select_play, index))
+                                _ = button.props("flat no-caps align=left").classes("pb-play-button")
+                                if index == self.play_index:
+                                    _ = button.classes("pb-active").props('aria-current="true"')
+
+            _ = search.on_value_change(filter_plays)
+            filter_plays()
+
+    @staticmethod
+    def _icon_action(label: str, icon: str, action: Callable[[], None], enabled: bool = True) -> None:
+        button: ui.button = ui.button(icon=icon, on_click=action).props(f'flat dense round aria-label="{label}"')
+        _ = button.tooltip(label)
+        _ = button.set_enabled(enabled)
+
+    def _inspector(self, editor: PlaybookEditor, play: GridironPlay) -> None:
+        with ui.element("aside").classes("pb-inspector").props('aria-label="Lineup"'):
+            with ui.row().classes("pb-section-title"):
+                _ = ui.label("Lineup").classes("pb-section-name")
+                count: int = len(play.routes)
+                _ = ui.label(f"{count} route" if count == 1 else f"{count} routes").classes("pb-count")
+            slots: tuple[int, ...] = tuple(
+                dict.fromkeys((*formation_starts(play.formation_name), *(r.slot for r in play.routes)))
             )
-        self._diagram(editor, play, index)
-        _ = ui.label(f"ROUTES · {len(play.routes)}").classes("pb-eyebrow")
-        with ui.row().classes("pb-actions"):
-            for route_index, route in enumerate(play.routes):
-                route_button: ui.button = ui.button(
-                    f"Slot {route.slot} · {len(route.points)} points",
-                    on_click=partial(self._select_route, route_index),
-                ).props("outline no-caps")
-                if self.route_index == route_index:
-                    _ = route_button.classes("pb-active")
-            if not play.routes:
-                _ = ui.label("Use Draw route to add the first player route.").classes("pb-muted")
+            for slot in slots:
+                indices: list[int] = [i for i, r in enumerate(play.routes) if r.slot == slot]
+                if not indices:
+                    self._lineup_row(play, slot, None)
+                for index in indices:
+                    self._lineup_row(play, slot, index)
+            _ = (
+                ui.button("Draw route", icon="gesture", on_click=partial(self._draw_dialog, play))
+                .props("unelevated no-caps")
+                .classes("pb-draw")
+            )
+            with ui.row().classes("pb-play-actions"):
+                _ = ui.button(
+                    "Rename", icon="edit", on_click=partial(self._rename_dialog, editor, self.play_index)
+                ).props("flat dense no-caps")
+                _ = ui.button(
+                    "Duplicate", icon="content_copy", on_click=partial(self._duplicate_dialog, editor, self.play_index)
+                ).props("flat dense no-caps")
+
+    def _lineup_row(self, play: GridironPlay, slot: int, route_index: int | None) -> None:
+        position: str = position_label(play.formation_name, slot)
+        if route_index is None:
+            button: ui.button = ui.button(on_click=partial(self._start_drawing, slot))
+            _ = button.props(f'aria-label="Draw route for {position}, slot {slot}"').classes("pb-unassigned")
+        else:
+            button = ui.button(on_click=partial(self._select_route, route_index))
+            selected: bool = route_index == self.route_index
+            label: str = f"Select {position}, slot {slot}, route {route_index + 1}"
+            _ = button.props(
+                f'aria-label="{label}" aria-pressed="{str(selected).lower()}" data-testid="route-{route_index}"'
+            )
+            if selected:
+                _ = button.classes("pb-active")
+        with button.props(f'flat no-caps data-position="{position}"').classes("pb-route"):
+            _ = ui.element("span").classes("pb-dot").props("aria-hidden=true")
+            _ = ui.label(position).classes("pb-route-name")
+            if route_index is None:
+                _ = ui.icon("add").classes("pb-route-add")
+            else:
+                count: int = len(play.routes[route_index].points)
+                _ = ui.label(f"{count} pt" if count == 1 else f"{count} pts").classes("pb-route-points")
+        _ = button.tooltip(f"Draw route · Slot {slot}" if route_index is None else f"Slot {slot}")
+
+    def _start_drawing(self, slot: int) -> None:
+        self.draft_slot = slot
+        self.route_index = None
+        self.render()
 
     def _select_route(self, index: int) -> None:
         self.route_index = index
@@ -256,13 +325,8 @@ class _PlaybookPage:
                 self._select_route(route)
 
         def move(route: int, point: int, x: float, y: float) -> None:
-            if generation != self.generation or route != self.route_index:
-                return
-            try:
-                editor.move_route_point(index, route, point, x, y)
-            except (IndexError, ValueError) as error:
-                ui.notify(str(error), type="negative")
-            self.render()
+            if generation == self.generation and route == self.route_index:
+                self._move_point(editor, index, route, point, x, y)
 
         def finish(slot: int, points: tuple[GridironPoint, ...]) -> None:
             if generation == self.generation and slot == self.draft_slot:
@@ -270,8 +334,7 @@ class _PlaybookPage:
 
         def cancel() -> None:
             if generation == self.generation:
-                self.draft_slot = None
-                self.render()
+                self._select_play(index)
 
         _ = PlayDiagram(
             play,
@@ -281,7 +344,19 @@ class _PlaybookPage:
             on_move=move,
             on_finish=finish,
             on_cancel=cancel,
+            on_draw=partial(self._draw_from_diagram, generation, play),
         )
+
+    def _draw_from_diagram(self, generation: int, play: GridironPlay, slot: int) -> None:
+        if generation == self.generation and slot in formation_starts(play.formation_name):
+            self._start_drawing(slot)
+
+    def _move_point(self, editor: PlaybookEditor, index: int, route: int, point: int, x: float, y: float) -> None:
+        try:
+            editor.move_route_point(index, route, point, x, y)
+        except (IndexError, ValueError) as error:
+            ui.notify(str(error), type="negative")
+        self.render()
 
     def _finish_route(self, editor: PlaybookEditor, index: int, slot: int, points: tuple[GridironPoint, ...]) -> None:
         try:
@@ -294,12 +369,26 @@ class _PlaybookPage:
     def _new_play_dialog(self, editor: PlaybookEditor) -> None:
         with ui.dialog() as dialog, ui.card().classes("pb-dialog"):
             _ = ui.label("New play").classes("pb-heading")
-            formation: ui.input = ui.input("Formation", value=self.formation or "").classes("w-full")
+            formation_names: list[str] = list(
+                dict.fromkeys((*FORMATION_NAMES, *(p.formation_name for p in editor.plays)))
+            )
+            formation: ui.input = ui.input(
+                "Formation",
+                value=self.formation or (editor.plays[self.play_index].formation_name if editor.plays else ""),
+                autocomplete=formation_names,
+            ).classes("w-full")
+            with (
+                formation.add_slot("append"),
+                ui.dropdown_button(auto_close=True).props('flat round dense aria-label="Choose formation"'),
+            ):
+                for name_option in formation_names:
+                    _ = ui.item(name_option, on_click=partial(formation.set_value, name_option))
             name: ui.input = ui.input("Play name").classes("w-full")
 
             def create() -> None:
                 index: int = editor.create_play(formation.value or "", name.value or "")
                 self.formation = None
+                self.search = ""
                 self._select_play(index)
 
             self._dialog_actions(dialog, "Create play", create)
@@ -329,19 +418,44 @@ class _PlaybookPage:
         _ = dialog.open()
 
     def _draw_dialog(self, play: GridironPlay) -> None:
-        used: set[int] = {route.slot for route in play.routes}
-        suggestion: int = next((n for n in range(256) if n not in used), 0)
+        known: tuple[int, ...] = tuple(formation_starts(play.formation_name))
+        used: list[int] = [r.slot for r in play.routes]
+        slots: tuple[int, ...] = tuple(dict.fromkeys((*observed_route_slots(play.formation_name), *known, *used)))
+        preferred: int | None = next((slot for slot in slots if slot not in used), slots[0] if slots else None)
+        selected: int | None = preferred
         with ui.dialog() as dialog, ui.card().classes("pb-dialog"):
             _ = ui.label("Draw route").classes("pb-heading")
-            slot: ui.input = ui.input("Player slot", value=str(suggestion)).props("type=number min=0 max=255 step=1")
+            slot_field: ui.input = ui.input("Player slot").props("type=number min=0 max=255 step=1")
+            choices: dict[int | None, ui.button] = {}
+
+            def choose(slot: int | None) -> None:
+                nonlocal selected
+                selected = slot
+                for key, choice in choices.items():
+                    _ = choice.classes(
+                        add="pb-active" if key == slot else None, remove=None if key == slot else "pb-active"
+                    )
+                    _ = choice.props(f'aria-pressed="{str(key == slot).lower()}"')
+                _ = slot_field.set_visibility(slot is None)
+
+            with ui.row().classes("pb-position-choices"):
+                for slot in (*slots, None):
+                    label: str = position_label(play.formation_name, slot) if slot is not None else "Custom slot"
+                    choice: ui.button = ui.button(label, on_click=partial(choose, slot)).props("outline no-caps")
+                    if slot is not None:
+                        _ = choice.tooltip(f"Slot {slot}")
+                    choices[slot] = choice
+            _ = slot_field.move()
+            choose(selected)
 
             def start() -> None:
-                value: str = slot.value or ""
+                if selected is not None:
+                    self._start_drawing(selected)
+                    return
+                value: str = slot_field.value or ""
                 if not value.isdecimal() or not 0 <= int(value) <= 255:
                     raise ValueError("Enter a whole player slot from 0 to 255.")
-                self.draft_slot = int(value)
-                self.route_index = None
-                self.render()
+                self._start_drawing(int(value))
 
             self._dialog_actions(dialog, "Start drawing", start)
         _ = dialog.open()

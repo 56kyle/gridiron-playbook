@@ -50,7 +50,11 @@ def test_move_route_point_with_browser_drag(tmp_path: Path) -> None:
         _ = page.goto(_EDITOR_URL)
         page.locator("input[type=file]").set_input_files(_FIXTURE)
         field = page.get_by_test_id("play-field")
-        page.get_by_role("button", name=f"Slot {play.routes[0].slot} ").last.click()
+        expect(field.locator("[data-lineup-slot]")).to_have_count(7)
+        expect(field.locator('[data-lineup-slot="1"]')).to_be_visible()
+        field.locator('[data-route-index="0"]').focus()
+        page.keyboard.press("Enter")
+        expect(field.locator("[data-point-index]")).to_have_count(len(play.routes[0].points))
         handle = field.locator('[data-point-index="1"]')
         expect(handle).to_be_visible()
         handle.scroll_into_view_if_needed()
@@ -74,7 +78,7 @@ def test_move_route_point_with_browser_drag(tmp_path: Path) -> None:
     moved: GridironPoint = reopened.root.properties.custom_plays[0].routes[0].points[1]
     pixels_per_game_unit: float = svg_scale * FieldTransform.for_play(play).scale
     assert (moved.x, moved.y) == pytest.approx(
-        (point.x + dx / pixels_per_game_unit, point.y - dy / pixels_per_game_unit)
+        (point.x - dy / pixels_per_game_unit, point.y + dx / pixels_per_game_unit)
     )
     assert moved.z == point.z
     restored: PlaybookEditor = PlaybookEditor(reopened)

@@ -12,19 +12,24 @@ Open the loopback URL printed in the terminal (normally `http://127.0.0.1:8080`)
 Choose a custom-play `.sav` or its uesave `.json` export. Each tab holds its own
 copy in memory. Download your changes before closing or refreshing the page.
 
-1. Select a formation and a play. Use **Duplicate** to try a variation or
+1. Search the play library or filter by formation. Use **Duplicate** to try a variation or
    **New play** to add an empty play to the open document.
-2. Select a route by its line or slot button. Drag a handle to move that point.
+2. Select a route on the field or in the lineup. Drag a handle to move a waypoint.
    A drag preserves its game-space height and counts as one edit.
-3. To create a route, choose **Draw route**, enter a player slot, and click
-   successive points on the field. Choose **Finish route** to keep it, or
-   **Cancel** to discard the draft. New route points have a height of zero.
+3. Select an unused player on the field or in the lineup to draw their route.
+   Alternatively, choose **Draw route**, choose a position or **Custom slot**,
+   and start drawing. Click the field to add waypoints. A verified starting
+   position needs only one waypoint; a route without a known start needs two.
+   Choose **Finish route** to keep the route or **Cancel** to discard it.
+   New waypoints have a height of zero.
 4. Use **Undo** and **Redo** to step through completed edits.
 5. Choose **Download .sav** to save the edited copy. Use **Open playbook** to
    reopen it. Downloading uses the browser's download location.
 
-The field fits the selected play. Its markings are drawing guides; the editor
-does not infer yardage or player positions from a formation name.
+The field fits the selected play. For the ten [documented formations](reference.md#offensive-formations-and-slots),
+player markers show the game's starting positions. Routes connect those markers
+to the saved waypoints. Starting positions are display references and are never
+added to the downloaded save.
 
 ### Verify a browser drag
 

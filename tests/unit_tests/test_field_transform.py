@@ -26,6 +26,17 @@ def test_field_to_game_with_asymmetric_play() -> None:
     assert transform.field_to_game(*transform.game_to_field(point.x, point.y)) == pytest.approx((point.x, point.y))
 
 
+def test_game_to_field_with_downfield_and_lateral_displacement() -> None:
+    from gridiron_playbook.web.play_diagram import FieldTransform
+
+    transform: FieldTransform = FieldTransform.for_play(_play_with_points())
+    origin_x, origin_y = transform.game_to_field(0, 0)
+
+    assert transform.game_to_field(300, 80) == pytest.approx(
+        (origin_x + 80 * transform.scale, origin_y - 300 * transform.scale)
+    )
+
+
 @pytest.mark.parametrize(
     "points",
     [

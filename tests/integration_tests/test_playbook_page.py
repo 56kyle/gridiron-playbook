@@ -63,6 +63,30 @@ async def test_playbook_page_with_separate_tabs(custom_plays_json: str) -> None:
         await first.should_see("first-tab.json")
 
 
+async def test_playbook_page_with_custom_formation_and_slot(custom_plays_json: str) -> None:
+    from nicegui import ui
+
+    from gridiron_playbook.web.play_diagram import PlayDiagram
+
+    async with _simulate_editor() as user:
+        _ = await user.open("/")
+        await _upload(user, "original.json", custom_plays_json.encode())
+        await user.should_see("original.json")
+        _ = user.find("New play").click()
+        _ = user.find(kind=ui.input, content="Formation").type("Custom spread")
+        _ = user.find(kind=ui.input, content="Play name").type("Flat")
+        _ = user.find("Create play").click()
+        await user.should_see("Custom spread")
+
+        _ = user.find("Draw route").click()
+        _ = user.find("Custom slot").click()
+        _ = user.find(kind=ui.input, content="Player slot").type("255")
+        _ = user.find("Start drawing").click()
+        _ = user.find(PlayDiagram).trigger("route_finish", {"points": [{"x": 100, "y": 200}, {"x": 140, "y": 240}]})
+
+        await user.should_see(kind=ui.label, content="Slot 255")
+
+
 @pytest.mark.parametrize("cancel", [True, False], ids=["cancelled", "superseded"])
 async def test_playbook_page_with_obsolete_upload(custom_plays_json: str, cancel: bool) -> None:
     from nicegui import ui
