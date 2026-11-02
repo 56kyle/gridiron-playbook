@@ -72,5 +72,5 @@ build-backend = "maturin"
 
 [tool.maturin]
 python-source = "src"
-module-name = "gridiron_playbook.gridiron_playbook"
+module-name = "gridiron_playbook._native"
 manifest-path = "rust/Cargo.toml"

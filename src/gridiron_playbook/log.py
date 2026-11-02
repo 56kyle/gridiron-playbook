@@ -9,9 +9,9 @@ from gridiron_playbook.constants import FILE_SAFE_DATETIME_FORMAT
 from gridiron_playbook.constants import USER_LOG_FOLDER
 
 
-_FILE_SAFE_DATETIME_SLUG: str = APP_START_TIME.strftime(FILE_SAFE_DATETIME_FORMAT)
+FILE_SAFE_DATETIME_SLUG: str = APP_START_TIME.strftime(FILE_SAFE_DATETIME_FORMAT)
 
-LOG_PATH: Path = USER_LOG_FOLDER / f"log_{_FILE_SAFE_DATETIME_SLUG}.log"
+LOG_PATH: Path = USER_LOG_FOLDER / f"log_{FILE_SAFE_DATETIME_SLUG}.log"
 
 
 LOG_HANDLER_ID: int = logger.add(LOG_PATH, serialize=True)
