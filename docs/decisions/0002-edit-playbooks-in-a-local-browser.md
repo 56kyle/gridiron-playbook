@@ -47,7 +47,9 @@ database, Steam installation, or a frontend build tool to edit an uploaded save.
 - The web extra brings an HTTP server and additional dependencies. Updating it
   requires checking the packaged JavaScript component and pointer interactions.
 - Refreshing a tab discards undownloaded edits. A diagram shows relative geometry;
-  the fixture does not establish the game's orientation or a yards-per-unit scale.
+  later verification against the playtest's formation data and a labeled screenshot
+  established the player starts and axis orientation for ten formations. See
+  the [formation reference](../reference.md#offensive-formations-and-slots).
 
 ### Confirmation
 

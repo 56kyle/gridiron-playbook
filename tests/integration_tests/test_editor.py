@@ -4,11 +4,21 @@ from gridiron_playbook.editor import PlaybookEditor
 from gridiron_playbook.playbook import GridironPlaybook
 from gridiron_playbook.playbook import playbook_to_sav
 from gridiron_playbook.playbook import sav_to_playbook
+from gridiron_playbook.point import GridironPoint
 
 
 if TYPE_CHECKING:
     from gridiron_playbook.play import GridironPlay
-    from gridiron_playbook.point import GridironPoint
+
+
+def test_add_route_with_one_saved_waypoint(custom_plays_json: str) -> None:
+    editor: PlaybookEditor = PlaybookEditor(GridironPlaybook.model_validate_json(custom_plays_json))
+    play_index: int = editor.create_play("Shotgun Right", "QB keeper")
+    drawn: GridironPoint = GridironPoint(X_0=1000, Y_0=125, Z_0=2.5)
+    route_index: int = editor.add_route(play_index, 0, (drawn,))
+
+    reopened: GridironPlaybook = sav_to_playbook(playbook_to_sav(editor.playbook))
+    assert reopened.root.properties.custom_plays[play_index].routes[route_index].points == (drawn,)
 
 
 def test_duplicate_play_with_edited_save_round_trip(custom_plays_json: str) -> None:

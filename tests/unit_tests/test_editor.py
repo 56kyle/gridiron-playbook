@@ -15,7 +15,8 @@ if TYPE_CHECKING:
 
 _NONFINITE = "coordinates must be finite"
 _SLOT_RANGE = "slot must be an integer from 0 to 255"
-_TOO_FEW_POINTS = "at least two points"
+_NO_WAYPOINTS = "at least one waypoint"
+_TOO_FEW_POINTS = "without a known starting position"
 _BLANK_NAME = "cannot be blank"
 
 
@@ -66,7 +67,8 @@ def test_move_route_point_with_nonfinite_coordinate(editor: PlaybookEditor, axis
     [
         (-1, (GridironPoint(X_0=0, Y_0=0, Z_0=0), GridironPoint(X_0=1, Y_0=1, Z_0=0)), _SLOT_RANGE),
         (256, (GridironPoint(X_0=0, Y_0=0, Z_0=0), GridironPoint(X_0=1, Y_0=1, Z_0=0)), _SLOT_RANGE),
-        (1, (GridironPoint(X_0=0, Y_0=0, Z_0=0),), _TOO_FEW_POINTS),
+        (0, (), _NO_WAYPOINTS),
+        (255, (GridironPoint(X_0=0, Y_0=0, Z_0=0),), _TOO_FEW_POINTS),
         (1, (GridironPoint(X_0=0, Y_0=0, Z_0=0), GridironPoint(X_0=0, Y_0=1, Z_0=float("nan"))), _NONFINITE),
     ],
 )

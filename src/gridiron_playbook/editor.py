@@ -4,6 +4,7 @@ from collections import deque
 from math import isfinite
 from typing import TypeVar
 
+from gridiron_playbook.formations import formation_starts
 from gridiron_playbook.play import GridironPlay
 from gridiron_playbook.playbook import GridironPlaybook
 from gridiron_playbook.playbook import GridironPlaybookProperties
@@ -109,8 +110,10 @@ class PlaybookEditor:
         play: GridironPlay = _at(self.plays, play_index)
         if not 0 <= slot <= _MAX_BYTE:
             raise ValueError("A player slot must be an integer from 0 to 255.")
-        if len(points) < 2:
-            raise ValueError("A drawn route needs at least two points.")
+        if not points:
+            raise ValueError("Draw at least one waypoint for the route.")
+        if len(points) == 1 and slot not in formation_starts(play.formation_name):
+            raise ValueError("Draw two waypoints for a player without a known starting position.")
         if not all(isfinite(value) for point in points for value in (point.x, point.y, point.z)):
             raise ValueError("Route coordinates must be finite.")
         route: GridironRoute = GridironRoute(Slot_0=slot, Points_0=points)
