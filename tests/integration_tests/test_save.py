@@ -5,6 +5,8 @@ from pydantic import JsonValue
 from pydantic import TypeAdapter
 
 from gridiron_playbook.playbook import GridironPlaybook
+from gridiron_playbook.playbook import playbook_to_sav
+from gridiron_playbook.playbook import sav_to_playbook
 from gridiron_playbook.save import json_to_sav
 from gridiron_playbook.save import sav_to_json
 
@@ -24,6 +26,12 @@ def test_sav_to_json(custom_plays_json: str) -> None:
 
 def test_json_to_sav(custom_plays_json: str) -> None:
     assert json_to_sav(custom_plays_json) == _SAV_FIXTURE.read_bytes()
+
+
+def test_playbook_to_sav_with_unedited_document() -> None:
+    source: bytes = _SAV_FIXTURE.read_bytes()
+
+    assert playbook_to_sav(sav_to_playbook(source)) == source
 
 
 def test_json_to_sav_with_renamed_play(custom_plays_json: str) -> None:

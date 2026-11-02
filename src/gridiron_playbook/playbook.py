@@ -199,7 +199,7 @@ def playbook_to_sav(playbook: GridironPlaybook) -> bytes:
 
 def playbook_to_json(playbook: GridironPlaybook) -> str:
     """Returns the provided playbook as a JSON str."""
-    return playbook.model_dump_json(indent=4)
+    return playbook.model_dump_json(indent=4, by_alias=True, exclude_unset=True)
 
 
 if __name__ == "__main__":
