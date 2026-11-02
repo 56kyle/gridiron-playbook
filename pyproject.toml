@@ -33,6 +33,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+browser-tests = [
+    "playwright>=1.64.1,<2",
+]
 dev = [
     "commitizen>=4.7.0",
     "nox>=2025.5.1",
@@ -60,6 +63,11 @@ docs = [
 Homepage = "https://github.com/56kyle/gridiron-playbook"
 Repository = "https://github.com/56kyle/gridiron-playbook"
 
+[project.optional-dependencies]
+web = [
+    "nicegui>=3.18.0,<4",
+]
+
 [[tool.uv.index]]
 name = "testpypi"
 url = "https://test.pypi.org/simple/"
@@ -71,6 +79,7 @@ requires = ["maturin>=1.9.0,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
+exclude = ["**/gridiron_playbook/GridironCustomPlays.json"]
 python-source = "src"
 module-name = "gridiron_playbook._native"
 manifest-path = "rust/Cargo.toml"

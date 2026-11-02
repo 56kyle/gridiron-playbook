@@ -1,5 +1,49 @@
 # Usage
 
+## Local playbook editor
+
+From the repository root, run:
+
+```console
+uv run --extra web python -m gridiron_playbook.web
+```
+
+Open the loopback URL printed in the terminal (normally `http://127.0.0.1:8080`).
+Choose a custom-play `.sav` or its uesave `.json` export. Each tab holds its own
+copy in memory. Download your changes before closing or refreshing the page.
+
+1. Select a formation and a play. Use **Duplicate** to try a variation or
+   **New play** to add an empty play to the open document.
+2. Select a route by its line or slot button. Drag a handle to move that point.
+   A drag preserves its game-space height and counts as one edit.
+3. To create a route, choose **Draw route**, enter a player slot, and click
+   successive points on the field. Choose **Finish route** to keep it, or
+   **Cancel** to discard the draft. New route points have a height of zero.
+4. Use **Undo** and **Redo** to step through completed edits.
+5. Choose **Download .sav** to save the edited copy. Use **Open playbook** to
+   reopen it. Downloading uses the browser's download location.
+
+The field fits the selected play. Its markings are drawing guides; the editor
+does not infer yardage or player positions from a formation name.
+
+### Verify a browser drag
+
+The optional browser integration test opens the checked-in fixture, moves a
+route point, and checks the downloaded save. To run it on Windows with Edge,
+start the editor in one terminal:
+
+```powershell
+uv run --extra web --group browser-tests python -m gridiron_playbook.web
+```
+
+In a second terminal, run:
+
+```powershell
+$env:PLAYBOOK_EDITOR_TEST_URL = "http://127.0.0.1:8080"
+$env:PLAYBOOK_EDITOR_BROWSER_CHANNEL = "msedge"
+uv run --extra web --group browser-tests pytest tests/integration_tests/test_browser_diagram.py
+```
+
 ## Validate custom plays
 
 ```python
