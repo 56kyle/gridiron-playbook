@@ -22,6 +22,7 @@ export default {
   props: {
     lineup: Array, routes: Array, selected: Number, initialPoint: Number, draftSlot: Number, draftLabel: String,
     fieldWidth: Number, fieldHeight: Number, diagramId: Number, originY: Number, canDraw: Boolean, canEditNodes: Boolean,
+    interactive: Boolean,
   },
   emits: ['route_select', 'route_start', 'point_move', 'point_insert', 'point_delete', 'block_add', 'route_finish', 'route_cancel'],
   data() {
@@ -36,6 +37,13 @@ export default {
     }
   },
   computed: {
+    fieldEvents() {
+      return this.interactive ? {
+        click: this.placePoint, pointermove: this.movePointer, pointerleave: this.clearPreview,
+        pointerup: this.endDrag, lostpointercapture: this.cancelDrag,
+        pointercancel: () => { this.clearPreview(); this.cancelDrag(); },
+      } : {};
+    },
     drawing() { return this.draftSlot != null; },
     patternId() { return 'field-grid-' + this.diagramId; },
     arrowId() { return 'route-arrow-' + this.diagramId; },
@@ -55,6 +63,15 @@ export default {
     },
   },
   methods: {
+    selectionEvents(select) {
+      if (!this.interactive) return {};
+      return {click: select, keydown: event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          select();
+        }
+      }};
+    },
     origin(slot) {
       return this.lineup.find(player => player.slot === slot)?.at;
     },
@@ -213,13 +230,13 @@ export default {
     },
   },
   template: `
-    <section class="play-diagram" aria-label="Play diagram" @playbook-shortcut="handleShortcut">
-      <svg ref="field" class="play-field" data-testid="play-field" role="group" aria-label="Route editing field" tabindex="0"
+    <section class="play-diagram" aria-label="Play diagram" v-on="interactive ? {'playbook-shortcut': handleShortcut} : {}">
+      <svg ref="field" class="play-field" data-testid="play-field" :role="interactive ? 'group' : 'img'"
+           :aria-label="interactive ? 'Route editing field' : 'Route diagram'" :tabindex="interactive ? 0 : undefined"
            :viewBox="'0 0 ' + fieldWidth + ' ' + fieldHeight"
-           style="width:100%;display:block;background:var(--pb-field);touch-action:none;user-select:none"
-           :style="{cursor: drawing || addingNode ? 'crosshair' : 'default'}" @click="placePoint"
-           @pointermove="movePointer" @pointerleave="clearPreview" @pointerup="endDrag"
-           @pointercancel="clearPreview(); cancelDrag()" @lostpointercapture="cancelDrag">
+           style="width:100%;display:block;background:var(--pb-field);user-select:none"
+           :style="{cursor: drawing || addingNode ? 'crosshair' : 'default', touchAction: interactive ? 'none' : 'auto'}"
+           v-on="fieldEvents">
         <defs>
           <pattern :id="patternId" :width="fieldWidth" height="96" patternUnits="userSpaceOnUse" :y="originY">
             <rect :width="fieldWidth" height="96" fill="var(--pb-field)"/>
@@ -241,9 +258,10 @@ export default {
         </g>
 
         <g v-for="index in routeOrder" :key="'r'+index" :data-route-index="index" :data-position="routes[index].label"
-           role="button" :tabindex="drawing || addingNode ? -1 : 0" :aria-label="'Select '+routes[index].label+', slot '+routes[index].slot+', route '+(index+1)"
-           :aria-pressed="index === selected" @click="selectRoute(index)" @keydown.enter.prevent="selectRoute(index)"
-           @keydown.space.prevent="selectRoute(index)" :style="{cursor: drawing ? 'crosshair' : 'pointer'}"
+           :role="interactive ? 'button' : undefined" :tabindex="interactive ? (drawing || addingNode ? -1 : 0) : undefined"
+           :aria-label="interactive ? 'Select '+routes[index].label+', slot '+routes[index].slot+', route '+(index+1) : undefined"
+           :aria-pressed="interactive ? index === selected : undefined" v-on="selectionEvents(() => selectRoute(index))"
+           :style="{cursor: interactive ? (drawing ? 'crosshair' : 'pointer') : 'default'}"
            :opacity="drawing || (selected != null && index !== selected) ? .62 : 1">
           <polyline :points="polyline(points(index), origin(routes[index].slot))" fill="none" stroke="transparent"
                     stroke-width="24" pointer-events="stroke" stroke-linecap="round" stroke-linejoin="round"/>
@@ -270,10 +288,10 @@ export default {
         </g>
 
         <g v-for="player in lineup" :key="'s'+player.slot" :data-lineup-slot="player.slot" :data-position="player.label"
-           :transform="'translate('+player.at.join(' ')+')'" role="button" :tabindex="drawing || addingNode ? -1 : 0"
-           :aria-label="(playerRoute(player.slot) < 0 ? 'Draw ' : 'Select ') + player.label + ' route, slot ' + player.slot"
-           @click="selectPlayer(player.slot)" @keydown.enter.prevent="selectPlayer(player.slot)" @keydown.space.prevent="selectPlayer(player.slot)"
-           :style="{cursor: drawing ? 'crosshair' : 'pointer'}"
+           :transform="'translate('+player.at.join(' ')+')'" :role="interactive ? 'button' : undefined"
+           :tabindex="interactive ? (drawing || addingNode ? -1 : 0) : undefined"
+           :aria-label="interactive ? (playerRoute(player.slot) < 0 ? 'Draw ' : 'Select ') + player.label + ' route, slot ' + player.slot : undefined"
+           v-on="selectionEvents(() => selectPlayer(player.slot))" :style="{cursor: interactive ? (drawing ? 'crosshair' : 'pointer') : 'default'}"
            :opacity="drawing && player.slot !== draftSlot ? .65 : 1">
           <title>{{player.label}} · Slot {{player.slot}}</title>
           <rect :x="-playerWidth(player.label)/2" y="-13" :width="playerWidth(player.label)" height="26" rx="12"

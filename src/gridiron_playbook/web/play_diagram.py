@@ -134,7 +134,41 @@ class RouteNodeActions:
     add_block: Callable[[int, int], None]
 
 
-class PlayDiagram(ui.element, component="play_diagram.js"):
+class PlayField(ui.element, component="play_diagram.js"):
+    """Display one play's formation and saved routes."""
+
+    def __init__(self, play: GridironPlay) -> None:
+        """Project the saved geometry onto the field."""
+        super().__init__()
+        self._transform: FieldTransform = FieldTransform.for_play(play)
+        starts: Mapping[int, tuple[float, float]] = formation_starts(play.formation_name)
+        self._props.update(
+            lineup=[
+                {
+                    "slot": slot,
+                    "label": position_label(play.formation_name, slot),
+                    "at": self._transform.game_to_field(*start),
+                }
+                for slot, start in starts.items()
+            ],
+            routes=[
+                {
+                    "slot": route.slot,
+                    "label": position_label(play.formation_name, route.slot),
+                    "points": [self._transform.game_to_field(point.x, point.y) for point in route.points],
+                    "endsWithBlock": ends_with_block(route.points),
+                }
+                for route in play.routes
+            ],
+            originY=self._transform.game_to_field(0, 0)[1],
+            fieldWidth=_FIELD_WIDTH,
+            fieldHeight=_FIELD_HEIGHT,
+            diagramId=self.id,
+        )
+        _ = self.classes("w-full")
+
+
+class PlayDiagram(PlayField):
     """Render routes and report completed edits from the current diagram."""
 
     def __init__(
@@ -152,47 +186,24 @@ class PlayDiagram(ui.element, component="play_diagram.js"):
         initial_point: int | None = None,
     ) -> None:
         """Bind pointer events to routes in this snapshot of the play."""
-        super().__init__()
-        transform: FieldTransform = FieldTransform.for_play(play)
-        starts: Mapping[int, tuple[float, float]] = formation_starts(play.formation_name)
+        super().__init__(play)
         self._props.update(
-            lineup=[
-                {
-                    "slot": slot,
-                    "label": position_label(play.formation_name, slot),
-                    "at": transform.game_to_field(*start),
-                }
-                for slot, start in starts.items()
-            ],
-            routes=[
-                {
-                    "slot": route.slot,
-                    "label": position_label(play.formation_name, route.slot),
-                    "points": [transform.game_to_field(point.x, point.y) for point in route.points],
-                    "endsWithBlock": ends_with_block(route.points),
-                }
-                for route in play.routes
-            ],
+            interactive=True,
             selected=selected_route,
             initialPoint=initial_point,
             canEditNodes=node_actions is not None,
             draftSlot=draft_slot,
             draftLabel=position_label(play.formation_name, draft_slot) if draft_slot is not None else "",
             canDraw=on_draw is not None,
-            originY=transform.game_to_field(0, 0)[1],
-            fieldWidth=_FIELD_WIDTH,
-            fieldHeight=_FIELD_HEIGHT,
-            diagramId=self.id,
         )
-        _ = self.classes("w-full")
         if draft_slot is None:
             self._bind_route_actions(play, on_select, on_draw)
             if selected_route is not None:
                 self._bind_point_actions(
-                    selected_route, len(play.routes[selected_route].points), transform, on_move, node_actions
+                    selected_route, len(play.routes[selected_route].points), self._transform, on_move, node_actions
                 )
         else:
-            self._bind_draft_actions(draft_slot, transform, on_finish, on_cancel)
+            self._bind_draft_actions(draft_slot, self._transform, on_finish, on_cancel)
 
     def _bind_route_actions(
         self,
