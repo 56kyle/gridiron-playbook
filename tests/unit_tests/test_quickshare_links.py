@@ -6,6 +6,7 @@ from gridiron_playbook.play import GridironPlay
 from gridiron_playbook.quickshare.codec import encode_share
 from gridiron_playbook.quickshare.links import decode_link
 from gridiron_playbook.quickshare.links import make_link
+from gridiron_playbook.quickshare.links import viewer_url_from_env
 from gridiron_playbook.quickshare.links import warning_level
 from gridiron_playbook.quickshare.snapshot import ShareSnapshot
 
@@ -17,6 +18,39 @@ _BAD_LINK = "Quickshare"
 def single_play() -> ShareSnapshot:
     play = GridironPlay(FormationName_0="Spread", PlayName_0="Drag", Routes_0=())
     return ShareSnapshot(version=1, kind="play", plays=(play,))
+
+
+@pytest.mark.parametrize(
+    ("editor_base_url", "expected"),
+    [
+        ("http://localhost:8111/", "http://localhost:8111/quickshare/"),
+        ("https://playbook.example/editor/", "https://playbook.example/editor/quickshare/"),
+    ],
+)
+def test_viewer_url_from_env_without_configuration(
+    monkeypatch: pytest.MonkeyPatch, editor_base_url: str, expected: str
+) -> None:
+    monkeypatch.delenv("GRIDIRON_QUICKSHARE_URL", raising=False)
+    assert viewer_url_from_env(editor_base_url) == expected
+
+
+def test_viewer_url_from_env_with_hosted_viewer(monkeypatch: pytest.MonkeyPatch) -> None:
+    viewer = "https://viewer.example/shares/"
+    monkeypatch.setenv("GRIDIRON_QUICKSHARE_URL", viewer)
+    assert viewer_url_from_env("http://127.0.0.1:8080/") == viewer
+    assert viewer_url_from_env() == viewer
+
+
+def test_viewer_url_from_env_without_editor_or_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GRIDIRON_QUICKSHARE_URL", raising=False)
+    with pytest.raises(ValueError):
+        _ = viewer_url_from_env()
+
+
+def test_viewer_url_from_env_with_invalid_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GRIDIRON_QUICKSHARE_URL", "ftp://invalid.example/")
+    with pytest.raises(ValueError):
+        _ = viewer_url_from_env("http://127.0.0.1:8080/")
 
 
 def test_decode_link_without_network(single_play: ShareSnapshot, monkeypatch: pytest.MonkeyPatch) -> None:

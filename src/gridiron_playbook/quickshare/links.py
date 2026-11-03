@@ -15,6 +15,7 @@ from gridiron_playbook.quickshare.snapshot import ShareSnapshot
 
 
 _FRAGMENT = "#v1/"
+LOCAL_VIEWER_PATH = "/quickshare"
 _BASE64URL = re.compile(r"[A-Za-z0-9_-]+")
 _ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 _STANDARD_LIMIT = 2_000
@@ -63,12 +64,14 @@ def _viewer_url(value: str) -> str:
     return result
 
 
-def viewer_url_from_env() -> str:
-    """Read the address of the static viewer used for new links."""
+def viewer_url_from_env(editor_base_url: str | None = None) -> str:
+    """Use the configured viewer address or the viewer served with the editor."""
     value: str = os.environ.get("GRIDIRON_QUICKSHARE_URL", "").strip()
-    if not value:
+    if value:
+        return _viewer_url(value)
+    if not editor_base_url:
         raise ValueError("Set GRIDIRON_QUICKSHARE_URL to your viewer address to copy a link.")
-    return _viewer_url(value)
+    return _viewer_url(f"{editor_base_url.rstrip('/')}{LOCAL_VIEWER_PATH}/")
 
 
 def make_link(viewer_url: str, data: bytes) -> str:

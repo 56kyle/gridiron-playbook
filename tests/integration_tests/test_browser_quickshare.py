@@ -9,6 +9,7 @@ from math import sin
 from pathlib import Path
 from struct import pack
 from typing import TYPE_CHECKING
+from urllib.parse import urljoin
 from urllib.parse import urlsplit
 from zlib import decompress
 
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
 
 
 _EDITOR_URL: str = os.getenv("PLAYBOOK_EDITOR_TEST_URL", "")
-_SHARE_URL: str = os.getenv("PLAYBOOK_QUICKSHARE_TEST_URL", "")
+_SHARE_URL: str = os.getenv("PLAYBOOK_QUICKSHARE_TEST_URL", urljoin(_EDITOR_URL, "quickshare/"))
 _PLAY_COUNT = 121
 # Produced by the v1 encoder for a one-yard QB route with a terminal block.
 _V1_BLOCK_FRAGMENT = (
@@ -46,8 +47,8 @@ _V1_BLOCK_FRAGMENT = (
     "jMaMOkLicHO-AY059L-WkDjcHJAxMekExR1Q_HWuhpD4ARR_mREUdyAUbrjSJwD70_iX"
 )
 pytestmark = pytest.mark.skipif(
-    not _EDITOR_URL or not _SHARE_URL or find_spec("playwright") is None or find_spec("nicegui") is None,
-    reason="Set PLAYBOOK_EDITOR_TEST_URL and PLAYBOOK_QUICKSHARE_TEST_URL and install the browser dependencies.",
+    not _EDITOR_URL or find_spec("playwright") is None or find_spec("nicegui") is None,
+    reason="Set PLAYBOOK_EDITOR_TEST_URL and install the browser dependencies.",
 )
 
 

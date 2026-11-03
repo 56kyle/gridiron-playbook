@@ -57,7 +57,7 @@ class _ShareControls(ui.element, component="share_controls.js"):
         self._downloading: bool = False
         self._viewer: str | None = None
         try:
-            self._viewer = viewer_url_from_env()
+            self._viewer = viewer_url_from_env(str(self.client.request.base_url))
         except ValueError as error:
             self._props["viewerProblem"] = _error_text(error)
         self._props["options"] = [

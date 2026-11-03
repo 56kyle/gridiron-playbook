@@ -28,21 +28,13 @@ The updated editor and viewer open both the original binary format and the newer
 
 ## Run locally
 
-Install the web extra and run the viewer in one terminal.
+From the repository root, start the editor and its Quickshare viewer with one command.
 
 ```powershell
-uv sync --extra web
-uv run --extra web python -m gridiron_playbook.quickshare
-```
-
-Start the editor in a second terminal.
-
-```powershell
-$env:GRIDIRON_QUICKSHARE_URL = "http://127.0.0.1:8081/"
 uv run --extra web python -m gridiron_playbook.web
 ```
 
-A loopback link opens on the machine running that viewer. For links that work across computers, configure the editor with a public viewer address.
+Open the [editor](http://127.0.0.1:8080/) to create or edit plays. Copied links open in the [local viewer](http://127.0.0.1:8080/quickshare/). To share with someone on another computer, send a `.gridironshare` file or configure a public viewer as described below.
 
 ## Host the viewer
 
