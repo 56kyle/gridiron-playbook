@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Gridiron Quickshare</title>
+  <link rel="stylesheet" href="./editor.css">
+  <link rel="stylesheet" href="./viewer.css">
+  <script type="module" src="./viewer.js"></script>
+</head>
+<body>
+  <header class="pb-header">
+    <div class="pb-brand"><strong class="pb-brand-name">Gridiron</strong><span class="pb-file">Quickshare</span></div>
+    <div class="file-actions">
+      <button id="download" type="button" hidden title="Save this share at its received precision">Download share file</button>
+      <label class="file-picker">Open share file<input id="upload" type="file" accept=".gridironshare"></label>
+    </div>
+  </header>
+  <main class="pb-preview">
+    <p id="status" role="status">Open a Quickshare link or choose a .gridironshare file.</p>
+    <noscript>Enable JavaScript to open the play diagram.</noscript>
+    <div id="snapshot" hidden>
+      <div id="library" hidden>
+        <label>Find a play<input id="search" type="search" placeholder="Name or formation" autocomplete="off"></label>
+        <label>Select play<select id="plays"></select></label>
+      </div>
+      <div id="play" class="pb-preview-grid">
+        <section class="pb-board">
+          <div id="formation" class="pb-formation"></div>
+          <h1 id="title" class="pb-title"></h1>
+          <svg id="field" data-testid="play-field" role="img" aria-label="Route diagram" viewBox="0 0 800 630">
+            <defs>
+              <pattern id="grid" width="800" height="96" patternUnits="userSpaceOnUse">
+                <path d="M0 0H800" stroke="var(--pb-grid)" stroke-width="2"/>
+                <path d="M0 48H800" stroke="var(--pb-grid-minor)"/>
+                <path d="M267 0V96 M533 0V96" stroke="var(--pb-grid)" stroke-width="9" stroke-dasharray="1 8"/>
+              </pattern>
+              <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="4" markerHeight="4" orient="auto">
+                <path d="M1 1L11 6L1 11" stroke="context-stroke" fill="none" stroke-width="2.2" stroke-linejoin="round"/>
+              </marker>
+            </defs>
+            <rect width="800" height="630" fill="url(#grid)"/>
+            <path d="M18 0V630 M782 0V630" stroke="var(--pb-grid)"/>
+            <line id="baseline" x1="18" x2="782" stroke="var(--pb-baseline)" stroke-width="1.5"/>
+            <g id="paths"></g><g id="lineup"></g>
+          </svg>
+        </section>
+        <aside aria-label="Routes" class="pb-inspector">
+          <h2 class="pb-section-name">Routes</h2><ul id="routes"></ul>
+        </aside>
+      </div>
+      <p class="pb-preview-import">To import this share, open your playbook in the editor.</p>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,44 +1,62 @@
 # Quickshare
 
-A Quickshare link opens a read-only snapshot of one play or an ordered playbook. Anyone with the link can preview and import the plays. The sender can close the editor after creating the link.
+Quickshare carries the plays inside a link or a `.gridironshare` file. The viewer opens either format in the recipient's browser. Hosting the viewer requires only static files. The part of the URL after `#v1/` stays in the browser when it requests the page. Anyone with the complete link or file can read and forward the plays.
 
-## Try it locally
+## Share and import
 
-Install the web extra from the project directory.
+Open a playbook in the editor and choose **Share play** or **Share playbook**. Select a precision for the link and file. The character count includes the entire URL, including your viewer address.
+
+| Precision | Effect on coordinates |
+| --- | --- |
+| Exact (default) | Preserves the original coordinates. |
+| 1 mm | Rounds to the nearest millimeter. |
+| 1 cm | Rounds to the nearest centimeter. |
+
+Quickshare can represent a standard block with its anchor waypoint and facing. The viewer and editor expand the instruction back into the 28 game waypoints. Exact mode uses this shortcut only when it reproduces every coordinate bit for bit. With 1 mm or 1 cm precision, a standard block follows the rounded anchor and uses a two-byte heading. Hand-edited strokes remain individual waypoints.
+
+**Download share file** uses the selected precision. When a compact precision is selected, **Download exact file** saves the original coordinates. You can download and import files even without a configured viewer address.
+
+**Copy link** copies links of up to 2,000 characters directly. At 2,001–4,000 characters, confirm the warning that the link exceeds the standard Discord message limit. Above 4,000, confirm the stronger warning that the link also exceeds the Nitro limit. For long playbooks, send the share file as an attachment. These counts apply to the link alone.
+
+Recipients can open a link in a browser or choose a local share file on the viewer page. To use the plays in the game, open the destination playbook in the editor and import the link or file. The plays are appended in order. **Undo** removes the entire import. **Download .sav** saves the result using the recipient's Unreal save metadata.
+
+The viewer's **Download share file** button saves the received precision. For original coordinates, the sender can use **Download exact file** in their editor.
+
+### Existing shares
+
+The updated editor and viewer open both the original binary format and the newer block-compressed format. Both use the same `#v1/` URL fragment and `.gridironshare` extension. When updating a hosted viewer, export the new assets and deploy them together at its existing address so old links keep working.
+
+## Run locally
+
+Install the web extra and run the viewer in one terminal.
 
 ```powershell
 uv sync --extra web
-```
-
-Start the service in one terminal.
-
-```powershell
 uv run --extra web python -m gridiron_playbook.quickshare
 ```
 
-Start the editor in a second PowerShell terminal.
+Start the editor in a second terminal.
 
 ```powershell
-$env:GRIDIRON_QUICKSHARE_URL = "http://127.0.0.1:8081"
+$env:GRIDIRON_QUICKSHARE_URL = "http://127.0.0.1:8081/"
 uv run --extra web python -m gridiron_playbook.web
 ```
 
-Open a playbook. Choose **Share play** or **Share playbook**, then **Create link**. Copy the link and open it in another browser. A loopback link works on the computer that runs the service.
+A loopback link opens on the machine running that viewer. For links that work across computers, configure the editor with a public viewer address.
 
-To import, open the destination playbook in the editor. Choose **Import link**, paste the preview URL, and confirm the import. The editor appends the plays in order. **Undo** removes the entire import. Choose **Download .sav** to save the result.
+## Host the viewer
 
-## Share across computers
+1. Export the viewer into a new or empty directory.
 
-1. Run one Quickshare service on a host with persistent storage. Use `--database` to select a SQLite file on that storage. The default is `quickshare.sqlite3` in the user's application data directory.
-2. Serve the process through an HTTPS reverse proxy at the root of your domain. Forward HTTP and WebSocket traffic to the service. Its default listener is `127.0.0.1:8081`. Use `--host` and `--port` to change the listener.
-3. On each editor computer, set `GRIDIRON_QUICKSHARE_URL` to the same public origin, for example `https://share.example.org`. Restart the editor after changing the variable.
+   ```powershell
+   uv run --extra web python -m gridiron_playbook.quickshare --export ./quickshare-site
+   ```
 
-Keep the public origin and database across deployments. Back up the database to preserve published links. The service accepts anonymous publications. It limits publishing attempts per minute to 20 per client address and 120 per process. Configure the reverse proxy to supply the actual client address from a trusted upstream.
+2. Upload the exported files together to an HTTPS static site. Preserve their names and directory structure.
+3. Set `GRIDIRON_QUICKSHARE_URL` in the editor's environment to the viewer page, for example `https://share.example.org/playbook/`. Restart the editor.
 
-## Playbook size and contents
+The host serves the same assets to each visitor. Importing a link in the editor decodes the payload locally. Keep the viewer address and versioned decoder available for existing self-contained links.
 
-A link contains a random 22-character ID regardless of the number of plays. The preview lets the recipient search the book and draws one play at a time.
+## Limits
 
-Each version 1 snapshot supports up to 2,000 plays, 200,000 total waypoints, and 16 MiB of JSON. Each play supports up to 256 routes and 16,384 waypoints. Formation names, route slots, heights, block strokes, and duplicate play names survive import. The destination supplies its own Unreal save header and drawing state.
-
-Before import, the editor checks that it can encode and reopen the combined playbook. The local file limits are 64 MiB for `.sav` and 16 MiB for JSON.
+The snapshot format supports up to 2,000 plays and 200,000 total waypoints, with up to 256 routes and 16,384 waypoints per play. Encoded size limits also apply. The recipient's combined playbook must fit the editor's 64 MiB `.sav` limit. The editor checks that limit before changing the destination.

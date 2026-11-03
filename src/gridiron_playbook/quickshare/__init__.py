@@ -1,1 +1,1 @@
-"""Publish and retrieve immutable snapshots of plays and playbooks."""
+"""Share plays and playbooks using self-contained links and files."""

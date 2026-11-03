@@ -10,9 +10,9 @@ from gridiron_playbook.playbook import GridironPlaybook
 from gridiron_playbook.playbook import playbook_to_sav
 from gridiron_playbook.playbook import sav_to_playbook
 from gridiron_playbook.point import GridironPoint
+from gridiron_playbook.quickshare.codec import decode_share
+from gridiron_playbook.quickshare.codec import encode_share
 from gridiron_playbook.quickshare.snapshot import ShareSnapshot
-from gridiron_playbook.quickshare.snapshot import is_share_id
-from gridiron_playbook.quickshare.store import SnapshotStore
 from gridiron_playbook.route import GridironRoute
 
 
@@ -33,25 +33,14 @@ def large_snapshot(original: GridironPlaybook) -> ShareSnapshot:
     return ShareSnapshot(version=1, kind="playbook", plays=plays)
 
 
-def test_get_after_reopening_store(large_snapshot: ShareSnapshot, tmp_path: Path) -> None:
-    db = tmp_path / "shares.db"
-    share_id = SnapshotStore(db).create(large_snapshot)
-    store = SnapshotStore(db)
-    single = ShareSnapshot(version=1, kind="play", plays=(large_snapshot.plays[1],))
-    other_id = store.create(single)
-
-    assert is_share_id(share_id)
-    assert other_id != share_id
-    assert store.get(share_id) == large_snapshot
-    assert store.get(other_id) == single
-    assert store.get("!") is None
-
-
-def test_import_plays_with_large_snapshot(original: GridironPlaybook, large_snapshot: ShareSnapshot) -> None:
+def test_import_plays_with_large_share_file(
+    original: GridironPlaybook, large_snapshot: ShareSnapshot, tmp_path: Path
+) -> None:
     editor = PlaybookEditor(original)
     previous = original.root.properties.custom_plays
-
-    index = editor.import_plays(ShareSnapshot.from_bytes(large_snapshot.to_bytes()).plays)
+    share_file: Path = tmp_path / "full-book.gridironshare"
+    _ = share_file.write_bytes(encode_share(large_snapshot))
+    index = editor.import_plays(decode_share(share_file.read_bytes()).plays)
     assert index == len(previous)
     assert editor.revision == 1
     imported = editor.playbook

@@ -19,8 +19,6 @@ from gridiron_playbook.play import GridironPlay
 from gridiron_playbook.playbook import GridironPlaybook
 from gridiron_playbook.playbook import playbook_to_sav
 from gridiron_playbook.point import GridironPoint
-from gridiron_playbook.quickshare.client import QuickshareClient
-from gridiron_playbook.quickshare.client import QuickshareError
 from gridiron_playbook.quickshare.snapshot import ShareSnapshot
 from gridiron_playbook.web.play_diagram import PlayDiagram
 from gridiron_playbook.web.play_diagram import RouteNodeActions
@@ -76,7 +74,9 @@ class _PlaybookPage:
                             "flat no-caps"
                         )
                         _ = (
-                            ui.button("Import link", icon="add_link", on_click=partial(self._import_link, self.editor))
+                            ui.button(
+                                "Import share", icon="add_link", on_click=partial(self._import_share, self.editor)
+                            )
                             .props("flat no-caps")
                             .set_enabled(self.draft_slot is None)
                         )
@@ -167,9 +167,7 @@ class _PlaybookPage:
             return
         ui.download.content(contents, filename=filename, media_type="application/octet-stream")
 
-    def _open_quickshare(
-        self, editor: PlaybookEditor, open_dialog: Callable[[QuickshareClient, Callable[[], bool]], ui.dialog]
-    ) -> None:
+    def _open_quickshare(self, editor: PlaybookEditor, open_dialog: Callable[[Callable[[], bool]], ui.dialog]) -> None:
         if self.editor is not editor:
             return
         active: ui.dialog | None = self._quickshare_dialog
@@ -182,11 +180,8 @@ class _PlaybookPage:
             return self.generation == generation and self.editor is editor and editor.revision == revision
 
         try:
-            client: QuickshareClient = QuickshareClient.from_env()
             with self.container:
-                self._quickshare_dialog = open_dialog(client, is_current)
-        except QuickshareError as error:
-            ui.notify(str(error), type="negative")
+                self._quickshare_dialog = open_dialog(is_current)
         except ValidationError as error:
             reason: str = error.errors(include_input=False)[0]["msg"]
             ui.notify(f"Cannot share this snapshot. {reason}", type="negative")
@@ -197,7 +192,7 @@ class _PlaybookPage:
         else:
             self._open_quickshare(editor, partial(publish_dialog, "play", (play,)))
 
-    def _import_link(self, editor: PlaybookEditor) -> None:
+    def _import_share(self, editor: PlaybookEditor) -> None:
         def append(snapshot: ShareSnapshot) -> None:
             index: int = editor.import_plays(snapshot.plays)
             self.formation = None

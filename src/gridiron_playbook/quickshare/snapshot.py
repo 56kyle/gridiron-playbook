@@ -22,17 +22,12 @@ MAX_TOTAL_POINTS = 200_000
 MAX_NAME_LENGTH = 1_024
 # Leave room to fit a field spanning the origin and sum every segment's length.
 _MAX_FIELD_COORDINATE: float = float_info.max / (4 * MAX_POINTS_PER_PLAY)
-_SHARE_ID = re.compile(r"[A-Za-z0-9_-]{22}")
+
 _UNSAVABLE_NAME_CHARACTER = re.compile(r"[\x00\ud800-\udfff]")
 
 
 class SnapshotTooLargeError(ValueError):
     """A serialized snapshot exceeds the transfer limit."""
-
-
-def is_share_id(value: str) -> bool:
-    """Check the URL-safe identifier issued for a stored snapshot."""
-    return _SHARE_ID.fullmatch(value) is not None
 
 
 def validate_share_name(name: str) -> None:
