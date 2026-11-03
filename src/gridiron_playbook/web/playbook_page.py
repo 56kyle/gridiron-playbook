@@ -1,11 +1,13 @@
 """NiceGUI page for opening, editing, and downloading a playbook."""
 
+import asyncio
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
 from nicegui import events
 from nicegui import ui
+from pydantic import ValidationError
 
 from gridiron_playbook.block import route_yards_without_blocks
 from gridiron_playbook.editor import PlaybookEditor
@@ -15,30 +17,18 @@ from gridiron_playbook.formations import observed_route_slots
 from gridiron_playbook.formations import position_label
 from gridiron_playbook.play import GridironPlay
 from gridiron_playbook.playbook import GridironPlaybook
-from gridiron_playbook.playbook import json_to_playbook
 from gridiron_playbook.playbook import playbook_to_sav
-from gridiron_playbook.playbook import sav_to_playbook
 from gridiron_playbook.point import GridironPoint
-from gridiron_playbook.web.play_diagram import FieldTransform
+from gridiron_playbook.quickshare.client import QuickshareClient
+from gridiron_playbook.quickshare.client import QuickshareError
+from gridiron_playbook.quickshare.snapshot import ShareSnapshot
 from gridiron_playbook.web.play_diagram import PlayDiagram
 from gridiron_playbook.web.play_diagram import RouteNodeActions
-
-
-_MAX_FILE_BYTES: int = 16 * 1024 * 1024
-
-
-def _decode_uploaded_playbook(name: str, contents: bytes) -> GridironPlaybook:
-    suffix: str = Path(name).suffix.lower()
-    document: GridironPlaybook
-    if suffix == ".sav":
-        document = sav_to_playbook(contents)
-    elif suffix == ".json":
-        document = json_to_playbook(contents.decode("utf-8-sig"))
-    else:
-        raise ValueError("Choose a .sav or .json playbook.")
-    for play in document.root.properties.custom_plays:
-        _ = FieldTransform.for_play(play)
-    return document
+from gridiron_playbook.web.playbook_files import MAX_SAVE_BYTES
+from gridiron_playbook.web.playbook_files import decode_uploaded_playbook
+from gridiron_playbook.web.playbook_files import validate_upload_size
+from gridiron_playbook.web.share_dialog import import_dialog
+from gridiron_playbook.web.share_dialog import publish_dialog
 
 
 def playbook_page() -> None:
@@ -63,11 +53,15 @@ class _PlaybookPage:
         self.draft_slot: int | None = None
         self.generation: int = 0
         self._file_chooser: ui.upload | None = None
+        self._quickshare_dialog: ui.dialog | None = None
 
     def render(self, *, selected_point: int | None = None) -> None:
         """Replace the page controls and invalidate gestures from the old diagram."""
         self.generation += 1
         self._file_chooser = None
+        if self._quickshare_dialog is not None and not self._quickshare_dialog.is_deleted:
+            _ = self._quickshare_dialog.close()
+        self._quickshare_dialog = None
         _ = self.container.clear()
         with self.container:
             with ui.element("header").classes("pb-header"):
@@ -77,9 +71,19 @@ class _PlaybookPage:
                     if self.filename:
                         _ = ui.label(self.filename).classes("pb-file")
                 if self.editor is not None:
-                    with ui.row().classes("pb-actions"):
+                    with ui.row().classes("pb-actions").style("flex-wrap:wrap;max-width:100%"):
                         _ = ui.button("Open playbook", icon="folder_open", on_click=self._open_dialog).props(
                             "flat no-caps"
+                        )
+                        _ = (
+                            ui.button("Import link", icon="add_link", on_click=partial(self._import_link, self.editor))
+                            .props("flat no-caps")
+                            .set_enabled(self.draft_slot is None)
+                        )
+                        _ = (
+                            ui.button("Share playbook", icon="share", on_click=partial(self._publish, self.editor))
+                            .props("flat no-caps")
+                            .set_enabled(bool(self.editor.plays) and self.draft_slot is None)
                         )
                         _ = ui.button("Download .sav", icon="download", on_click=self._download).props(
                             "unelevated no-caps"
@@ -118,16 +122,17 @@ class _PlaybookPage:
             request: int = latest_request
             try:
                 name: str = Path(event.file.name).name
-                if event.file.size() > _MAX_FILE_BYTES:
-                    raise ValueError("Choose a file up to 16 MiB.")
+                validate_upload_size(name, event.file.size())
                 data: bytes = await event.file.read()
                 if request != latest_request or not chooser_is_open():
                     return
-                document: GridironPlaybook = _decode_uploaded_playbook(name, data)
+                document: GridironPlaybook = await asyncio.to_thread(decode_uploaded_playbook, name, data)
             except (ValueError, OSError) as error:
                 if request == latest_request and chooser_is_open():
                     _ = chooser.reset()
                     ui.notify(f"Could not open playbook. {str(error)[:250]}", type="negative")
+                return
+            if request != latest_request or not chooser_is_open():
                 return
             self.editor = PlaybookEditor(document)
             self.filename = name
@@ -142,24 +147,64 @@ class _PlaybookPage:
                 label="Choose .sav or .json",
                 auto_upload=True,
                 max_files=1,
-                max_file_size=_MAX_FILE_BYTES,
+                max_file_size=MAX_SAVE_BYTES,
                 on_upload=open_file,
-                on_rejected=lambda: ui.notify("Choose a .sav or .json file up to 16 MiB.", type="warning"),
+                on_rejected=lambda: ui.notify("Choose a .sav up to 64 MiB or .json up to 16 MiB.", type="warning"),
             )
             .props('accept=".sav,.json" flat bordered')
             .classes("pb-uploader")
         )
         self._file_chooser = chooser
 
-    def _download(self) -> None:
+    async def _download(self) -> None:
         if self.editor is None:
             return
+        filename: str = f"{Path(self.filename).stem}.sav"
         try:
-            contents: bytes = playbook_to_sav(self.editor.playbook)
+            contents: bytes = await asyncio.to_thread(playbook_to_sav, self.editor.playbook)
         except ValueError as error:
             ui.notify(f"Could not encode playbook. {str(error)[:250]}", type="negative")
             return
-        ui.download.content(contents, filename=f"{Path(self.filename).stem}.sav", media_type="application/octet-stream")
+        ui.download.content(contents, filename=filename, media_type="application/octet-stream")
+
+    def _open_quickshare(
+        self, editor: PlaybookEditor, open_dialog: Callable[[QuickshareClient, Callable[[], bool]], ui.dialog]
+    ) -> None:
+        if self.editor is not editor:
+            return
+        active: ui.dialog | None = self._quickshare_dialog
+        if active is not None and not active.is_deleted and active.value:
+            return
+        generation: int = self.generation
+        revision: int = editor.revision
+
+        def is_current() -> bool:
+            return self.generation == generation and self.editor is editor and editor.revision == revision
+
+        try:
+            client: QuickshareClient = QuickshareClient.from_env()
+            with self.container:
+                self._quickshare_dialog = open_dialog(client, is_current)
+        except QuickshareError as error:
+            ui.notify(str(error), type="negative")
+        except ValidationError as error:
+            reason: str = error.errors(include_input=False)[0]["msg"]
+            ui.notify(f"Cannot share this snapshot. {reason}", type="negative")
+
+    def _publish(self, editor: PlaybookEditor, play: GridironPlay | None = None) -> None:
+        if play is None:
+            self._open_quickshare(editor, partial(publish_dialog, "playbook", editor.plays))
+        else:
+            self._open_quickshare(editor, partial(publish_dialog, "play", (play,)))
+
+    def _import_link(self, editor: PlaybookEditor) -> None:
+        def append(snapshot: ShareSnapshot) -> None:
+            index: int = editor.import_plays(snapshot.plays)
+            self.formation = None
+            self.search = ""
+            self._select_play(index)
+
+        self._open_quickshare(editor, partial(import_dialog, editor.playbook, append))
 
     def _select_play(self, index: int) -> None:
         self.play_index = index
@@ -296,7 +341,12 @@ class _PlaybookPage:
                 .props("unelevated no-caps")
                 .classes("pb-draw")
             )
-            with ui.row().classes("pb-play-actions"):
+            with ui.row().classes("pb-play-actions").style("flex-wrap:wrap"):
+                _ = (
+                    ui.button("Share play", icon="share", on_click=partial(self._publish, editor, play))
+                    .props("flat dense no-caps")
+                    .set_enabled(self.draft_slot is None)
+                )
                 _ = ui.button(
                     "Rename", icon="edit", on_click=partial(self._rename_dialog, editor, self.play_index)
                 ).props("flat dense no-caps")

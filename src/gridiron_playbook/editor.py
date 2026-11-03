@@ -195,9 +195,15 @@ class PlaybookEditor:
         self._commit_plays(_replacing(self.plays, play_index, edited_play))
 
     def _append_play(self, play: GridironPlay) -> int:
-        index: int = len(self.plays)
-        self._commit_plays((*self.plays, play))
-        return index
+        return self.import_plays((play,))
+
+    def import_plays(self, plays: tuple[GridironPlay, ...]) -> int:
+        """Append completed plays as one undoable edit and return the first imported index."""
+        if not plays:
+            raise ValueError("Choose at least one play to import.")
+        first_index: int = len(self.plays)
+        self._commit_plays((*self.plays, *plays))
+        return first_index
 
     def _commit_plays(self, plays: tuple[GridironPlay, ...]) -> None:
         if plays == self.plays:
