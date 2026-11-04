@@ -109,8 +109,16 @@ class _PlayerSelection(_Input):
     slot: int = Field(ge=0, le=255)
 
 
-class _RouteDraft(_Input):
+class _DraftPoints(_Input):
+    points: list[_FieldPoint]
+
+
+class _RouteDraft(_DraftPoints):
     points: list[_FieldPoint] = Field(min_length=1)
+
+
+class _DraftChange(_DraftPoints):
+    sequence: int = Field(ge=1)
 
 
 def _validate_event(handler: Callable[[_Event], None]) -> Callable[[_Event], None]:
@@ -184,6 +192,8 @@ class PlayDiagram(PlayField):
         on_draw: Callable[[int], None] | None = None,
         node_actions: RouteNodeActions | None = None,
         initial_point: int | None = None,
+        initial_draft: tuple[GridironPoint, ...] = (),
+        on_draft: Callable[[tuple[GridironPoint, ...]], bool] | None = None,
     ) -> None:
         """Bind pointer events to routes in this snapshot of the play."""
         super().__init__(play)
@@ -195,6 +205,8 @@ class PlayDiagram(PlayField):
             draftSlot=draft_slot,
             draftLabel=position_label(play.formation_name, draft_slot) if draft_slot is not None else "",
             canDraw=on_draw is not None,
+            initialDraft=[self._transform.game_to_field(point.x, point.y) for point in initial_draft],
+            persistDraft=on_draft is not None,
         )
         if draft_slot is None:
             self._bind_route_actions(play, on_select, on_draw)
@@ -203,7 +215,7 @@ class PlayDiagram(PlayField):
                     selected_route, len(play.routes[selected_route].points), self._transform, on_move, node_actions
                 )
         else:
-            self._bind_draft_actions(draft_slot, self._transform, on_finish, on_cancel)
+            self._bind_draft_actions(draft_slot, self._transform, on_finish, on_cancel, on_draft)
 
     def _bind_route_actions(
         self,
@@ -259,14 +271,24 @@ class PlayDiagram(PlayField):
         transform: FieldTransform,
         on_finish: Callable[[int, tuple[GridironPoint, ...]], None],
         on_cancel: Callable[[], None],
+        on_draft: Callable[[tuple[GridironPoint, ...]], bool] | None,
     ) -> None:
-        def finish(event: _Event) -> None:
-            draft: _RouteDraft = _RouteDraft.model_validate(event.args)
+        def convert(draft: _DraftPoints) -> tuple[GridironPoint, ...]:
             points: list[GridironPoint] = []
             for point in draft.points:
                 x, y = transform.field_to_game(point.x, point.y)
                 points.append(GridironPoint(X_0=x, Y_0=y, Z_0=0.0))
-            on_finish(slot, tuple(points))
+            return tuple(points)
+
+        def finish(event: _Event) -> None:
+            on_finish(slot, convert(_RouteDraft.model_validate(event.args)))
+
+        def changed(event: _Event) -> None:
+            change = _DraftChange.model_validate(event.args)
+            if on_draft is not None and on_draft(convert(change)):
+                _ = self.run_method("draftSaved", change.sequence)
 
         _ = self.on("route_finish", _validate_event(finish))
         _ = self.on("route_cancel", on_cancel)
+        if on_draft is not None:
+            _ = self.on("draft_change", _validate_event(changed))

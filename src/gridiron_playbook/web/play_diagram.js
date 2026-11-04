@@ -22,20 +22,23 @@ export default {
   props: {
     lineup: Array, routes: Array, selected: Number, initialPoint: Number, draftSlot: Number, draftLabel: String,
     fieldWidth: Number, fieldHeight: Number, diagramId: Number, originY: Number, canDraw: Boolean, canEditNodes: Boolean,
-    interactive: Boolean,
+    interactive: Boolean, initialDraft: Array, persistDraft: Boolean,
   },
-  emits: ['route_select', 'route_start', 'point_move', 'point_insert', 'point_delete', 'block_add', 'route_finish', 'route_cancel'],
+  emits: ['route_select', 'route_start', 'point_move', 'point_insert', 'point_delete', 'block_add', 'route_finish', 'route_cancel', 'draft_change'],
   data() {
     return {
-      drag: null, draft: [], undonePoints: [], previewPoint: null,
+      drag: null, draft: (this.initialDraft ?? []).map(point => [...point]), undonePoints: [], previewPoint: null,
       activePoint: this.initialPoint ?? null, addingNode: false, insertion: null,
+      draftSequence: 0, savedDraftSequence: 0,
     };
   },
   mounted() {
+    window.addEventListener('beforeunload', this.beforeUnload);
     if (this.initialPoint != null && document.activeElement === document.body) {
       this.$refs.field.focus({preventScroll: true});
     }
   },
+  beforeUnmount() { window.removeEventListener('beforeunload', this.beforeUnload); },
   computed: {
     fieldEvents() {
       return this.interactive ? {
@@ -63,6 +66,13 @@ export default {
     },
   },
   methods: {
+    beforeUnload(event) {
+      if (this.draftSequence > this.savedDraftSequence) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    },
+    draftSaved(sequence) { this.savedDraftSequence = Math.max(this.savedDraftSequence, sequence); },
     selectionEvents(select) {
       if (!this.interactive) return {};
       return {click: select, keydown: event => {
@@ -187,12 +197,20 @@ export default {
       this.draft.push(point);
       this.undonePoints = [];
       this.previewPoint = null;
+      this.reportDraft();
     },
     undoPoint() {
       if (this.draft.length) this.undonePoints.push(this.draft.pop());
+      this.reportDraft();
     },
     redoPoint() {
       if (this.undonePoints.length) this.draft.push(this.undonePoints.pop());
+      this.reportDraft();
+    },
+    reportDraft() {
+      if (!this.persistDraft) return;
+      this.draftSequence += 1;
+      this.$emit('draft_change', {points: this.draft.map(([x, y]) => ({x, y})), sequence: this.draftSequence});
     },
     cancelDraft() {
       this.previewPoint = null;

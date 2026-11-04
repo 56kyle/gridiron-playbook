@@ -143,9 +143,14 @@ def test_workspace_transfer(
         page = context.new_page()
         _open_workspace(page, workspace_files)
         page.get_by_role("button", name="Source 1", exact=True).click()
+        expect(page.get_by_role("checkbox", name="Select Source 1", exact=True)).to_be_checked()
         page.get_by_role("button", name="Source 3", exact=True).click(modifiers=["Control"])
+        expect(page.get_by_role("checkbox", name="Select Source 1", exact=True)).to_be_checked()
+        expect(page.get_by_role("checkbox", name="Select Source 3", exact=True)).to_be_checked()
         page.get_by_role("tab", name=destination.name, exact=True).click()
+        expect(page.get_by_role("tab", name=destination.name, exact=True)).to_have_attribute("aria-selected", "true")
         page.get_by_role("tab", name=source.name, exact=True).click()
+        expect(page.get_by_role("tab", name=source.name, exact=True)).to_have_attribute("aria-selected", "true")
         expect(page.get_by_role("checkbox", name="Select Source 1", exact=True)).to_be_checked()
         expect(page.get_by_role("checkbox", name="Select Source 3", exact=True)).to_be_checked()
         page.get_by_role("button", name=action, exact=True).click()
@@ -160,12 +165,16 @@ def test_workspace_transfer(
             original_destination, (*chosen, *original_destination.root.properties.custom_plays)
         )
         page.get_by_role("tab", name=source.name, exact=True).click()
+        expect(page.get_by_role("tab", name=source.name, exact=True)).to_have_attribute("aria-selected", "true")
         expected_source = ["Source 0", "Source 2"] if action == "Move to" else [f"Source {i}" for i in range(4)]
         expect(page.locator(".pb-play-button")).to_have_text(expected_source)
         page.get_by_role("button", name="Undo", exact=True).click()
+        expect(page.get_by_role("button", name="Redo", exact=True)).to_be_enabled()
         page.get_by_role("tab", name=source.name, exact=True).click()
+        expect(page.get_by_role("tab", name=source.name, exact=True)).to_have_attribute("aria-selected", "true")
         expect(page.locator(".pb-play-button")).to_have_text([f"Source {i}" for i in range(4)])
         page.get_by_role("tab", name=destination.name, exact=True).click()
+        expect(page.get_by_role("tab", name=destination.name, exact=True)).to_have_attribute("aria-selected", "true")
         expect(page.locator(".pb-play-button")).to_have_text(["Destination 0", "Destination 1"])
 
 
@@ -177,7 +186,10 @@ def test_workspace_reorder_and_merge(browser: "Browser", workspace_files: tuple[
         page = context.new_page()
         _open_workspace(page, workspace_files)
         page.get_by_role("button", name="Source 1", exact=True).click()
+        expect(page.get_by_role("checkbox", name="Select Source 1", exact=True)).to_be_checked()
         page.get_by_role("button", name="Source 2", exact=True).click(modifiers=["Shift"])
+        expect(page.get_by_role("checkbox", name="Select Source 1", exact=True)).to_be_checked()
+        expect(page.get_by_role("checkbox", name="Select Source 2", exact=True)).to_be_checked()
         page.get_by_role("button", name="Move to top", exact=True).click()
         reordered = ["Source 1", "Source 2", "Source 0", "Source 3"]
         expect(page.locator(".pb-play-button")).to_have_text(reordered)
@@ -227,8 +239,10 @@ def test_workspace_new_and_close(browser: "Browser", workspace_files: tuple[Path
         page.get_by_role("tab", name=source.name, exact=True).click()
         expect(page.locator(".pb-play-button")).to_have_text([f"Source {i}" for i in range(4)])
         page.get_by_role("tab", name="New.sav", exact=True).click()
+        expect(page.get_by_role("tab", name="New.sav", exact=True)).to_have_attribute("aria-selected", "true")
         page.get_by_role("button", name="Close New.sav", exact=True).click()
         dialog.get_by_role("button", name="Cancel", exact=True).click()
+        expect(dialog).to_have_count(0)
         expect(page.get_by_role("tab", name="New.sav", exact=True)).to_have_count(1)
         expect(page.locator(".pb-play-button")).to_have_text(["New play"])
         page.get_by_role("button", name="Close New.sav", exact=True).click()
@@ -252,6 +266,110 @@ def _check_copy_link(page: "Page", expected_url: str, warning: str | None = None
         popup.get_by_role("button", name="Copy anyway", exact=True).click()
     expect(page.get_by_text("Link copied", exact=True).last).to_be_visible()
     assert page.evaluate("async expected => (await navigator.clipboard.readText()) === expected", expected_url) is True
+
+
+def _working_revision(page: "Page") -> int:
+    from playwright.sync_api import expect
+
+    recovery = page.locator("[data-recovery-revision]")
+    expect(recovery).to_have_attribute("data-recovery-status", "ready")
+    value = recovery.get_attribute("data-recovery-revision")
+    assert value is not None
+    return int(value)
+
+
+def _wait_for_working_save(page: "Page", previous_revision: int) -> None:
+    _ = page.wait_for_function(
+        """revision => {
+            const recovery = document.querySelector('[data-recovery-revision]');
+            return recovery?.dataset.recoveryStatus === 'ready' && Number(recovery.dataset.recoveryRevision) > revision;
+        }""",
+        arg=previous_revision,
+    )
+
+
+def test_working_copy_with_refresh(browser: "Browser", workspace_files: tuple[Path, Path]) -> None:
+    from playwright.sync_api import expect
+
+    source, destination = workspace_files
+    originals = (source.read_bytes(), destination.read_bytes())
+    with browser.new_context() as context:
+        page = context.new_page()
+        _open_workspace(page, workspace_files)
+        revision = _working_revision(page)
+        page.get_by_role("button", name="Rename", exact=True).click()
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_role("textbox", name="Play name", exact=True).fill("Working edit")
+        dialog.get_by_role("button", name="Rename play", exact=True).click()
+        expect(page.get_by_role("button", name="Working edit", exact=True)).to_be_visible()
+        _wait_for_working_save(page, revision)
+        page.get_by_role("button", name="Source 1", exact=True).click()
+        expect(page.get_by_role("button", name="Source 1", exact=True)).to_have_attribute("aria-current", "true")
+        revision = _working_revision(page)
+        page.get_by_role("button", name="Move to", exact=True).click()
+        page.get_by_role("menuitem", name=destination.name, exact=True).click()
+        expect(page.get_by_role("tab", name=destination.name, exact=True)).to_have_attribute("aria-selected", "true")
+        _wait_for_working_save(page, revision)
+        _ = page.reload()
+        expect(page.get_by_role("tab", name=destination.name, exact=True)).to_have_attribute("aria-selected", "true")
+        expect(page.locator(".pb-play-button")).to_have_text(["Source 1", "Destination 0", "Destination 1"])
+        expect(page.locator(".pb-dirty")).to_have_count(2)
+        page.get_by_role("tab", name=source.name, exact=True).click()
+        expect(page.locator(".pb-play-button")).to_have_text(["Working edit", "Source 2", "Source 3"])
+    assert (source.read_bytes(), destination.read_bytes()) == originals
+
+
+def test_working_copy_with_reopened_independent_window(browser: "Browser", workspace_files: tuple[Path, Path]) -> None:
+    from playwright.sync_api import expect
+
+    source, destination = workspace_files
+    with browser.new_context() as context:
+        first = context.new_page()
+        _open_workspace(first, workspace_files)
+        _ = _working_revision(first)
+        second = context.new_page()
+        _ = second.goto(_EDITOR_URL)
+        expect(second.get_by_role("tab")).to_have_count(2)
+        expect(second.get_by_role("tab", name=source.name, exact=True)).to_have_attribute("aria-selected", "true")
+        revision = _working_revision(second)
+        expect(second.get_by_role("button", name="Source 0", exact=True)).to_have_attribute("aria-current", "true")
+        second.get_by_role("button", name="Rename", exact=True).click()
+        dialog = second.get_by_role("dialog")
+        dialog.get_by_role("textbox", name="Play name", exact=True).fill("Second window")
+        dialog.get_by_role("button", name="Rename play", exact=True).click()
+        expect(second.get_by_role("button", name="Second window", exact=True)).to_be_visible()
+        _wait_for_working_save(second, revision)
+        _ = first.reload()
+        expect(first.locator(".pb-play-button")).to_have_text([f"Source {i}" for i in range(4)])
+        revision = _working_revision(second)
+        second.get_by_role("tab", name=destination.name, exact=True).click()
+        _wait_for_working_save(second, revision)
+        first.close()
+        second.close()
+        reopened = context.new_page()
+        _ = reopened.goto(_EDITOR_URL)
+        expect(reopened.get_by_role("tab", name=destination.name, exact=True)).to_have_attribute(
+            "aria-selected", "true"
+        )
+        reopened.get_by_role("tab", name=source.name, exact=True).click()
+        expect(reopened.locator(".pb-play-button")).to_have_text(["Second window", "Source 1", "Source 2", "Source 3"])
+
+
+def test_working_copy_with_all_tabs_closed(browser: "Browser", workspace_files: tuple[Path, Path]) -> None:
+    from playwright.sync_api import expect
+
+    with browser.new_context() as context:
+        page = context.new_page()
+        _open_workspace(page, workspace_files)
+        revision = _working_revision(page)
+        for path in workspace_files:
+            page.get_by_role("button", name=f"Close {path.name}", exact=True).click()
+            expect(page.get_by_role("tab", name=path.name, exact=True)).to_have_count(0)
+        expect(page.get_by_text("Open your playbook", exact=True)).to_be_visible()
+        _wait_for_working_save(page, revision)
+        _ = page.reload()
+        expect(page.get_by_role("tab")).to_have_count(0)
+        expect(page.get_by_text("Open your playbook", exact=True)).to_be_visible()
 
 
 def _select_precision(page: "Page", label: str) -> None:

@@ -137,6 +137,54 @@ def _preview_end(line: "Locator") -> str:
     return f"{line.get_attribute('x2')},{line.get_attribute('y2')}"
 
 
+def test_draw_route_with_working_copy_refresh(editor_page: "Page", tmp_path: Path) -> None:
+    from playwright.sync_api import expect
+
+    field = editor_page.get_by_test_id("play-field")
+    field.locator('[data-lineup-slot="1"]').click()
+    bridge = editor_page.locator("[data-recovery-revision]")
+    expect(bridge).to_have_attribute("data-recovery-status", "ready")
+    revision = bridge.get_attribute("data-recovery-revision")
+    assert revision is not None
+    field.click(position={"x": 70, "y": 80})
+    _ = editor_page.wait_for_function(
+        """revision => {
+            const recovery = document.querySelector('[data-recovery-revision]');
+            return recovery?.dataset.recoveryStatus === 'ready' && Number(recovery.dataset.recoveryRevision) > revision;
+        }""",
+        arg=int(revision),
+    )
+    revision = bridge.get_attribute("data-recovery-revision")
+    assert revision is not None
+    field.click(position={"x": 120, "y": 60})
+    path = field.locator("[data-draft-path]")
+    original_points = path.get_attribute("points")
+    assert original_points is not None
+    _ = editor_page.wait_for_function(
+        """revision => {
+            const recovery = document.querySelector('[data-recovery-revision]');
+            return recovery?.dataset.recoveryStatus === 'ready' && Number(recovery.dataset.recoveryRevision) > revision;
+        }""",
+        arg=int(revision),
+    )
+    _ = editor_page.reload()
+    expect(editor_page.get_by_role("button", name="Finish route", exact=True)).to_be_enabled()
+    restored = path.get_attribute("points")
+    assert restored is not None
+    assert [float(axis) for point in restored.split() for axis in point.split(",")] == pytest.approx(
+        [float(axis) for point in original_points.split() for axis in point.split(",")]
+    )
+    editor_page.get_by_role("button", name="Finish route", exact=True).click()
+    expect(path).to_have_count(0)
+    with editor_page.expect_download() as transfer:
+        editor_page.get_by_role("button", name="Download .sav", exact=True).click()
+    downloaded = tmp_path / "recovered-draft.sav"
+    transfer.value.save_as(downloaded)
+    route = sav_to_playbook(downloaded.read_bytes()).root.properties.custom_plays[0].routes[-1]
+    assert route.slot == 1
+    assert len(route.points) == 2
+
+
 def test_draw_route_with_pointer_preview_and_shortcuts(editor_page: "Page", tmp_path: Path) -> None:
     from playwright.sync_api import expect
 

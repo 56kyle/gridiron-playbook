@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from importlib.util import find_spec
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import pytest
 from typing_extensions import override
@@ -10,6 +11,7 @@ from typing_extensions import override
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
+    from pathlib import Path
 
     from nicegui.testing import User
 
@@ -17,6 +19,18 @@ if TYPE_CHECKING:
 if find_spec("nicegui") is None:
     pytest.skip("Install the web extra to exercise NiceGUI page interactions.", allow_module_level=True)
 pytestmark = [pytest.mark.anyio, pytest.mark.parametrize("anyio_backend", ["asyncio"])]
+
+
+@pytest.fixture(autouse=True)
+def working_copy_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("GRIDIRON_WORKING_COPY_PATH", str(tmp_path / "working.sqlite3"))
+
+
+async def _initialize_recovery(user: User) -> None:
+    from gridiron_playbook.web.recovery import RecoveryBridge
+
+    _ = user.find(RecoveryBridge).trigger("ready", {"workspace_id": uuid4().hex, "source_id": None})
+    await user.should_see("Open your playbook")
 
 
 def _simulate_editor() -> AbstractAsyncContextManager[User]:
@@ -38,6 +52,7 @@ async def _upload(user: User, name: str, data: bytes) -> None:
 async def test_playbook_page_with_invalid_replacement(custom_plays_json: str) -> None:
     async with _simulate_editor() as user:
         _ = await user.open("/")
+        await _initialize_recovery(user)
         await _upload(user, "original.json", custom_plays_json.encode())
         await user.should_see("original.json")
         _ = user.find("Open playbook").click()
@@ -53,11 +68,13 @@ async def test_playbook_page_with_separate_tabs(custom_plays_json: str) -> None:
 
     async with _simulate_editor() as first:
         _ = await first.open("/")
+        await _initialize_recovery(first)
         await _upload(first, "first-tab.json", custom_plays_json.encode())
         await first.should_see("first-tab.json")
 
         second: testing.User = testing.User(first.http_client)
         _ = await second.open("/")
+        await _initialize_recovery(second)
         await second.should_see("Open your playbook")
         await second.should_not_see("first-tab.json")
         await first.should_see("first-tab.json")
@@ -70,6 +87,7 @@ async def test_playbook_page_with_custom_formation_and_slot(custom_plays_json: s
 
     async with _simulate_editor() as user:
         _ = await user.open("/")
+        await _initialize_recovery(user)
         await _upload(user, "original.json", custom_plays_json.encode())
         await user.should_see("original.json")
         _ = user.find(marker="new-play").click()
@@ -109,6 +127,7 @@ async def test_playbook_page_with_obsolete_upload(custom_plays_json: str, cancel
     data: bytes = custom_plays_json.encode()
     async with _simulate_editor() as user:
         _ = await user.open("/")
+        await _initialize_recovery(user)
         await _upload(user, "opened.json", data)
         await user.should_see("opened.json")
         _ = user.find("Open playbook").click()

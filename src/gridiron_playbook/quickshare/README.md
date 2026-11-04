@@ -32,6 +32,10 @@ The updated editor and viewer open both the original binary format and the newer
 
 ## Run locally
 
+The editor keeps local working copies in its application data folder. It restores open tabs, their edits, and the active tab when you refresh or reopen it in the same browser. Uploaded save files stay untouched. Use **Download .sav** to export the active working copy.
+
+Separate browser windows have independent working copies. Reopening restores the most recently used copy. Undo and redo history starts fresh after recovery.
+
 From the repository root, start the editor and its Quickshare viewer with one command.
 
 ```powershell

@@ -29,11 +29,20 @@ from gridiron_playbook.playbook import GridironPlaybook
 from gridiron_playbook.playbook import playbook_to_sav
 from gridiron_playbook.point import GridironPoint
 from gridiron_playbook.quickshare.snapshot import ShareSnapshot
+from gridiron_playbook.route import GridironRoute
+from gridiron_playbook.web.play_diagram import FieldTransform
 from gridiron_playbook.web.play_diagram import PlayDiagram
 from gridiron_playbook.web.play_diagram import RouteNodeActions
 from gridiron_playbook.web.playbook_files import MAX_SAVE_BYTES
 from gridiron_playbook.web.playbook_files import decode_uploaded_playbook
 from gridiron_playbook.web.playbook_files import validate_upload_size
+from gridiron_playbook.web.recovery import RecoveryBridge
+from gridiron_playbook.web.recovery import RecoveryIdentity
+from gridiron_playbook.web.recovery import RecoveryState
+from gridiron_playbook.web.recovery import SavedDraft
+from gridiron_playbook.web.recovery import SavedView
+from gridiron_playbook.web.recovery import WorkingRecovery
+from gridiron_playbook.web.recovery import working_copy_store
 from gridiron_playbook.web.share_dialog import import_dialog
 from gridiron_playbook.web.share_dialog import publish_dialog
 from gridiron_playbook.workspace import PlaybookWorkspace
@@ -93,9 +102,19 @@ class _PlaybookPage:
         self.books: PlaybookWorkspace = PlaybookWorkspace()
         self.views: dict[str, _TabView] = {}
         self.view: _TabView = _TabView()
+        self.recovery: WorkingRecovery = WorkingRecovery(working_copy_store())
+        self._recovery_ready: bool = False
+        self._recovery_identity: RecoveryIdentity | None = None
+        self._recovery_problem: str = ""
+        self._browser_storage_failed: bool = False
+        self._recovery_bridge: RecoveryBridge = RecoveryBridge()
+        _ = self._recovery_bridge.on("ready", self._restore_working_copy)
+        _ = self._recovery_bridge.on("unavailable", self._browser_storage_unavailable)
+        _ = self._recovery_bridge.on("available", self._browser_storage_available)
         self.container: _WorkspaceSurface = _WorkspaceSurface().classes("pb-app")
         _ = self.container.on("drop_plays", self._drop_plays)
         self.draft_slot: int | None = None
+        self.draft_points: tuple[GridironPoint, ...] = ()
         self.generation: int = 0
         self._file_chooser: ui.upload | None = None
         self._quickshare_dialog: ui.dialog | None = None
@@ -110,12 +129,24 @@ class _PlaybookPage:
 
     def render(self, *, selected_point: int | None = None) -> None:
         """Replace the page controls and invalidate gestures from the old diagram."""
+        if not self._recovery_ready:
+            _ = self.container.clear()
+            with self.container, ui.column().classes("pb-welcome"):
+                if self._recovery_problem:
+                    _ = ui.label(self._recovery_problem)
+                    _ = ui.button("Retry recovery", on_click=self._retry_recovery).props("flat no-caps")
+                    _ = ui.button("Start new workspace", on_click=self._start_new_workspace).props("unelevated no-caps")
+                else:
+                    _ = ui.spinner()
+                    _ = ui.label("Restoring workspace")
+            return
         self.books.checkpoint()
         active = self.books.active
         if active is not None:
             self.view = self.views.setdefault(active.id, _TabView())
             self.view.play_index = min(self.view.play_index, max(0, len(active.editor.plays) - 1))
             self.view.selected.intersection_update(range(len(active.editor.plays)))
+        _ = self._persist_working_copy()
         self.generation += 1
         self.container.set_context(
             self.generation,
@@ -129,6 +160,11 @@ class _PlaybookPage:
         self._quickshare_dialog = None
         _ = self.container.clear()
         with self.container:
+            if self._recovery_problem:
+                with ui.row().classes("w-full items-center p-3"):
+                    _ = ui.icon("warning").classes("text-warning")
+                    _ = ui.label(self._recovery_problem)
+                    _ = ui.button("Retry saving", on_click=self.render).props("flat no-caps")
             with ui.element("header").classes("pb-header"):
                 with ui.row().classes("pb-brand"):
                     _ = ui.icon("sports_football").classes("pb-brand-icon")
@@ -159,6 +195,115 @@ class _PlaybookPage:
                 self._welcome()
             else:
                 self._workspace(self.editor, selected_point)
+
+    def _restore_working_copy(self, event: _ControlEvent) -> None:
+        if self._recovery_ready:
+            return
+        try:
+            identity = RecoveryIdentity.model_validate(event.args)
+        except ValidationError:
+            return
+        self._restore_identity(identity)
+
+    def _restore_identity(self, identity: RecoveryIdentity) -> None:
+        self._recovery_identity = identity
+        try:
+            state = self.recovery.restore(identity)
+            if state is not None:
+                for tab in state.workspace.tabs:
+                    for play in tab.document.root.properties.custom_plays:
+                        _ = FieldTransform.for_play(play)
+                    if tab.id == state.workspace.active_id and state.draft is not None:
+                        view = state.views.get(tab.id, SavedView())
+                        play = tab.document.root.properties.custom_plays[view.play_index]
+                        draft_route = GridironRoute(Slot_0=state.draft.slot, Points_0=state.draft.points)
+                        _ = FieldTransform.for_play(play.model_copy(update={"routes": (*play.routes, draft_route)}))
+                self.books = PlaybookWorkspace.from_snapshot(state.workspace)
+                self.views = {
+                    tab_id: _TabView(
+                        formation=view.formation,
+                        search=view.search,
+                        play_index=view.play_index,
+                        route_index=view.route_index,
+                        selected=set(view.selected),
+                        anchor=view.anchor,
+                    )
+                    for tab_id, view in state.views.items()
+                }
+                self.draft_slot = state.draft.slot if state.draft is not None else None
+                self.draft_points = state.draft.points if state.draft is not None else ()
+            self._recovery_problem = ""
+            self._recovery_ready = True
+        except (OSError, ValueError) as error:
+            self._recovery_problem = f"Could not restore the local working copy. {str(error)[:180]}"
+            self._recovery_bridge.failed()
+        self.render()
+
+    def _retry_recovery(self) -> None:
+        if self._recovery_identity is not None:
+            self._restore_identity(self._recovery_identity)
+        else:
+            _ = self._recovery_bridge.run_method("initialize")
+
+    def _start_new_workspace(self) -> None:
+        self.recovery.start_new()
+        self._recovery_problem = ""
+        self._recovery_ready = True
+        self.render()
+
+    def _browser_storage_unavailable(self) -> None:
+        problem = "Browser storage is unavailable. Keep this page open and download your playbooks."
+        if self._browser_storage_failed:
+            return
+        self._browser_storage_failed = True
+        self._recovery_problem = problem
+        self._recovery_bridge.failed()
+        self.render()
+
+    def _browser_storage_available(self) -> None:
+        if self._browser_storage_failed:
+            self._browser_storage_failed = False
+            self._recovery_problem = ""
+            self.render()
+
+    def _working_state(self) -> RecoveryState:
+        views: dict[str, SavedView] = {}
+        for tab in self.books.tabs:
+            view = self.views.get(tab.id, _TabView())
+            plays = tab.editor.plays
+            play_index = min(view.play_index, max(0, len(plays) - 1))
+            route_index = view.route_index
+            if route_index is not None and (not plays or route_index >= len(plays[play_index].routes)):
+                route_index = None
+            views[tab.id] = SavedView(
+                formation=view.formation,
+                search=view.search,
+                play_index=play_index,
+                route_index=route_index,
+                selected=tuple(sorted(index for index in view.selected if index < len(plays))),
+                anchor=view.anchor,
+            )
+        draft = SavedDraft(slot=self.draft_slot, points=self.draft_points) if self.draft_slot is not None else None
+        return RecoveryState(version=1, workspace=self.books.snapshot(), views=views, draft=draft)
+
+    def _persist_working_copy(self) -> bool:
+        if not self._recovery_ready:
+            return False
+        try:
+            workspace_id = self.recovery.save(self._working_state())
+            self._recovery_bridge.saved(workspace_id, self.recovery.revision)
+            if self._browser_storage_failed:
+                self._recovery_bridge.failed()
+            else:
+                self._recovery_problem = ""
+            return not self._browser_storage_failed
+        except (OSError, ValueError) as error:
+            problem = f"Local working copy could not be saved. {str(error)[:180]}"
+            if problem != self._recovery_problem:
+                ui.notify(problem, type="negative")
+            self._recovery_problem = problem
+            self._recovery_bridge.failed()
+            return False
 
     def _welcome(self) -> None:
         with ui.element("main").classes("pb-welcome"):
@@ -383,6 +528,7 @@ class _PlaybookPage:
             return False
         ui.download.content(contents, filename=filename, media_type="application/octet-stream")
         self.books.mark_saved(tab_id, document)
+        _ = self._persist_working_copy()
         return True
 
     def _open_quickshare(self, editor: PlaybookEditor, open_dialog: Callable[[Callable[[], bool]], ui.dialog]) -> None:
@@ -432,6 +578,7 @@ class _PlaybookPage:
         self.view.anchor = index
         self.view.route_index = None
         self.draft_slot = None
+        self.draft_points = ()
         self.render()
 
     def _set_filter(self, formation: str | None) -> None:
@@ -683,6 +830,7 @@ class _PlaybookPage:
                     if not matches:
                         _ = ui.label("No matches" if query else "No plays").classes("pb-list-empty")
                     self._play_rows(editor, matches, formations)
+                _ = self._persist_working_copy()
 
             _ = search.on_value_change(filter_plays)
             filter_plays()
@@ -797,12 +945,14 @@ class _PlaybookPage:
 
     def _start_drawing(self, slot: int) -> None:
         self.draft_slot = slot
+        self.draft_points = ()
         self.view.route_index = None
         self.render()
 
     def _select_route(self, index: int) -> None:
         self.view.route_index = index
         self.draft_slot = None
+        self.draft_points = ()
         self.render()
 
     def _diagram(self, editor: PlaybookEditor, play: GridironPlay, index: int, selected_point: int | None) -> None:
@@ -825,11 +975,19 @@ class _PlaybookPage:
             if generation == self.generation:
                 self._select_play(index)
 
+        def remember_draft(points: tuple[GridironPoint, ...]) -> bool:
+            if generation != self.generation or self.draft_slot is None:
+                return False
+            self.draft_points = points
+            return self._persist_working_copy()
+
         _ = PlayDiagram(
             play,
             selected_route=self.view.route_index,
             draft_slot=self.draft_slot,
             initial_point=selected_point,
+            initial_draft=self.draft_points,
+            on_draft=remember_draft,
             node_actions=self._node_actions(editor, index, play, edit_point),
             on_select=select,
             on_move=move,
