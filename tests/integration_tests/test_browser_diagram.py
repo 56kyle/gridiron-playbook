@@ -142,11 +142,15 @@ def test_draw_route_with_working_copy_refresh(editor_page: "Page", tmp_path: Pat
 
     field = editor_page.get_by_test_id("play-field")
     field.locator('[data-lineup-slot="1"]').click()
+    expect(editor_page.get_by_role("button", name="Finish route", exact=True)).to_be_visible()
+    draft_count = editor_page.locator(".pb-draft-tools strong")
+    expect(draft_count).to_contain_text(" · 0 points")
     bridge = editor_page.locator("[data-recovery-revision]")
     expect(bridge).to_have_attribute("data-recovery-status", "ready")
     revision = bridge.get_attribute("data-recovery-revision")
     assert revision is not None
     field.click(position={"x": 70, "y": 80})
+    expect(draft_count).to_contain_text(" · 1 point")
     _ = editor_page.wait_for_function(
         """revision => {
             const recovery = document.querySelector('[data-recovery-revision]');
@@ -157,6 +161,7 @@ def test_draw_route_with_working_copy_refresh(editor_page: "Page", tmp_path: Pat
     revision = bridge.get_attribute("data-recovery-revision")
     assert revision is not None
     field.click(position={"x": 120, "y": 60})
+    expect(draft_count).to_contain_text(" · 2 points")
     path = field.locator("[data-draft-path]")
     original_points = path.get_attribute("points")
     assert original_points is not None
@@ -169,6 +174,7 @@ def test_draw_route_with_working_copy_refresh(editor_page: "Page", tmp_path: Pat
     )
     _ = editor_page.reload()
     expect(editor_page.get_by_role("button", name="Finish route", exact=True)).to_be_enabled()
+    expect(draft_count).to_contain_text(" · 2 points")
     restored = path.get_attribute("points")
     assert restored is not None
     assert [float(axis) for point in restored.split() for axis in point.split(",")] == pytest.approx(
