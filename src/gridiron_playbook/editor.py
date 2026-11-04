@@ -105,19 +105,19 @@ class PlaybookEditor:
             self._revision += 1
 
     def create_play(self, formation_name: str, play_name: str) -> int:
-        """Append an empty play and return its index."""
+        """Insert an empty play at the top and return its index."""
         play: GridironPlay = GridironPlay(
             FormationName_0=_name(formation_name, "Formation name"),
             PlayName_0=_name(play_name, "Play name"),
             Routes_0=(),
         )
-        return self._append_play(play)
+        return self.import_plays((play,))
 
     def duplicate_play(self, play_index: int, play_name: str) -> int:
-        """Append a named copy of the play and return its index."""
+        """Insert a named copy at the top and return its index."""
         original: GridironPlay = _at(self.plays, play_index)
         duplicate: GridironPlay = original.model_copy(update={"play_name": _name(play_name, "Play name")})
-        return self._append_play(duplicate)
+        return self.import_plays((duplicate,))
 
     def rename_play(self, play_index: int, play_name: str) -> None:
         """Change a play's name while retaining its formation and routes."""
@@ -193,11 +193,6 @@ class PlaybookEditor:
             update={"routes": _replacing(play.routes, route_index, edited_route)}
         )
         self._commit_plays(_replacing(self.plays, play_index, edited_play))
-
-    def _append_play(self, play: GridironPlay) -> int:
-        index = len(self.plays)
-        self._commit_plays((*self.plays, play))
-        return index
 
     def import_plays(self, plays: tuple[GridironPlay, ...]) -> int:
         """Insert plays at the top in source order and return the first imported index."""

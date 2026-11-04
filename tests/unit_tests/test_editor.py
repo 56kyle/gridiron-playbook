@@ -22,10 +22,26 @@ _REQUIRED_NODES = "remaining waypoints"
 
 
 def test_create_play(editor: PlaybookEditor) -> None:
+    previous: tuple[GridironPlay, ...] = editor.plays
     index: int = editor.create_play(" Bunch ", " Jet sweep ")
     play: GridironPlay = editor.playbook.root.properties.custom_plays[index]
 
     assert (play.formation_name, play.play_name, play.routes) == ("Bunch", "Jet sweep", ())
+    assert index == 0
+    assert editor.plays == (play, *previous)
+
+
+def test_duplicate_play(editor: PlaybookEditor) -> None:
+    original: GridironPlaybook = editor.playbook
+    previous: tuple[GridironPlay, ...] = editor.plays
+    index: int = editor.duplicate_play(len(previous) - 1, " Copy ")
+    assert index == 0
+    assert editor.plays == (previous[-1].model_copy(update={"play_name": "Copy"}), *previous)
+    duplicated: GridironPlaybook = editor.playbook
+    editor.undo()
+    assert editor.playbook == original
+    editor.redo()
+    assert editor.playbook == duplicated
 
 
 def test_move_route_point(editor: PlaybookEditor) -> None:
