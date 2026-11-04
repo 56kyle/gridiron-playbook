@@ -98,3 +98,13 @@ def test_validate_import_size_with_combined_oversized_save(
         playbook_files.validate_import_size(editor.playbook, single)
     assert editor.playbook is original
     assert editor.revision == 0
+
+
+def test_validate_import_size_with_whole_book_in_new_tab(
+    original: GridironPlaybook, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from gridiron_playbook.web import playbook_files
+
+    monkeypatch.setattr(playbook_files, "MAX_SAVE_BYTES", len(playbook_to_sav(original)))
+    snapshot = ShareSnapshot(version=1, kind="playbook", plays=original.root.properties.custom_plays)
+    playbook_files.validate_import_size(original, snapshot)

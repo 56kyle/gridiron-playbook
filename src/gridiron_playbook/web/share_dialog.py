@@ -149,7 +149,7 @@ class _LocalLinkInput(ui.element, component="share_link_input.js"):
 
 
 class _ImportDialog(ui.dialog):
-    """Append one locally decoded share while the destination revision is current."""
+    """Import a locally decoded share while the destination revision is current."""
 
     def __init__(
         self, recipient: GridironPlaybook, imported: Callable[[ShareSnapshot], None], is_current: Callable[[], bool]

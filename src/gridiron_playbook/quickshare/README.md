@@ -18,7 +18,11 @@ Quickshare can represent a standard block with its anchor waypoint and facing. T
 
 **Copy link** copies links of up to 2,000 characters directly. At 2,001–4,000 characters, confirm the warning that the link exceeds the standard Discord message limit. Above 4,000, confirm the stronger warning that the link also exceeds the Nitro limit. For long playbooks, send the share file as an attachment. These counts apply to the link alone.
 
-Recipients can open a link in a browser or choose a local share file on the viewer page. To use the plays in the game, open the destination playbook in the editor and import the link or file. Imported plays appear at the top of the list in their original order. **Undo** removes the entire import. **Download .sav** saves the result using the recipient's Unreal save metadata.
+Recipients can open a link in a browser or choose a local share file on the viewer page. In the editor, **Import share** adds an individual play to the top of the active book. A whole shared playbook opens in a new tab, using the active book's Unreal save metadata. Opening another `.sav` or `.json` file also creates a tab.
+
+Select plays to copy or move them between tabs. **Merge into** copies every play from one book into another in source order. The destination keeps its own save metadata. **Download .sav** downloads the active tab.
+
+**Undo** and **Redo** follow the order of edits across all tabs. Moving plays is one action that restores both books together. Undo can reopen a closed tab needed to restore an edit. Switching tabs and opening files do not add undo steps.
 
 The viewer's **Download share file** button saves the received precision. For original coordinates, the sender can use **Download exact file** in their editor.
 

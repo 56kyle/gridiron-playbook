@@ -9,6 +9,7 @@ from math import sin
 from pathlib import Path
 from struct import pack
 from typing import TYPE_CHECKING
+from typing import Literal
 from urllib.parse import urljoin
 from urllib.parse import urlsplit
 from zlib import decompress
@@ -99,6 +100,143 @@ def recipient_file(custom_plays_json: str, tmp_path: Path) -> Path:
     return destination
 
 
+@pytest.fixture
+def workspace_files(custom_plays_json: str, tmp_path: Path) -> tuple[Path, Path]:
+    template = json_to_playbook(custom_plays_json)
+    paths: list[Path] = []
+    for prefix, count in (("Source", 4), ("Destination", 2)):
+        plays = tuple(
+            template.root.properties.custom_plays[index % len(template.root.properties.custom_plays)].model_copy(
+                update={"play_name": f"{prefix} {index}"}
+            )
+            for index in range(count)
+        )
+        path = tmp_path / f"{prefix}.sav"
+        _ = path.write_bytes(playbook_to_sav(_with_plays(template, plays)))
+        paths.append(path)
+    return paths[0], paths[1]
+
+
+def _open_workspace(page: "Page", paths: tuple[Path, Path]) -> None:
+    from playwright.sync_api import expect
+
+    _ = page.goto(_EDITOR_URL)
+    page.locator("input[type=file]").set_input_files(paths[0])
+    page.get_by_role("button", name="Open playbook", exact=True).click()
+    page.get_by_role("dialog").locator("input[type=file]").set_input_files(paths[1])
+    expect(page.get_by_role("tab")).to_have_count(2)
+    page.get_by_role("tab", name=paths[0].name, exact=True).click()
+    expect(page.locator(".pb-play-button")).to_have_text([f"Source {i}" for i in range(4)])
+
+
+@pytest.mark.parametrize("action", ["Copy to", "Move to"])
+def test_workspace_transfer(
+    browser: "Browser", workspace_files: tuple[Path, Path], tmp_path: Path, action: str
+) -> None:
+    from playwright.sync_api import expect
+
+    source, destination = workspace_files
+    original_source = sav_to_playbook(source.read_bytes())
+    original_destination = sav_to_playbook(destination.read_bytes())
+    chosen = (original_source.root.properties.custom_plays[1], original_source.root.properties.custom_plays[3])
+    with browser.new_context() as context:
+        page = context.new_page()
+        _open_workspace(page, workspace_files)
+        page.get_by_role("button", name="Source 1", exact=True).click()
+        page.get_by_role("button", name="Source 3", exact=True).click(modifiers=["Control"])
+        page.get_by_role("tab", name=destination.name, exact=True).click()
+        page.get_by_role("tab", name=source.name, exact=True).click()
+        expect(page.get_by_role("checkbox", name="Select Source 1", exact=True)).to_be_checked()
+        expect(page.get_by_role("checkbox", name="Select Source 3", exact=True)).to_be_checked()
+        page.get_by_role("button", name=action, exact=True).click()
+        page.get_by_role("menuitem", name=destination.name, exact=True).click()
+        expect(page.get_by_role("tab", name=destination.name, exact=True)).to_have_attribute("aria-selected", "true")
+        expect(page.locator(".pb-play-button")).to_have_text(["Source 1", "Source 3", "Destination 0", "Destination 1"])
+        with page.expect_download() as transfer:
+            page.get_by_role("button", name="Download .sav", exact=True).click()
+        saved = tmp_path / "combined.sav"
+        transfer.value.save_as(saved)
+        assert sav_to_playbook(saved.read_bytes()) == _with_plays(
+            original_destination, (*chosen, *original_destination.root.properties.custom_plays)
+        )
+        page.get_by_role("tab", name=source.name, exact=True).click()
+        expected_source = ["Source 0", "Source 2"] if action == "Move to" else [f"Source {i}" for i in range(4)]
+        expect(page.locator(".pb-play-button")).to_have_text(expected_source)
+        page.get_by_role("button", name="Undo", exact=True).click()
+        page.get_by_role("tab", name=source.name, exact=True).click()
+        expect(page.locator(".pb-play-button")).to_have_text([f"Source {i}" for i in range(4)])
+        page.get_by_role("tab", name=destination.name, exact=True).click()
+        expect(page.locator(".pb-play-button")).to_have_text(["Destination 0", "Destination 1"])
+
+
+def test_workspace_reorder_and_merge(browser: "Browser", workspace_files: tuple[Path, Path]) -> None:
+    from playwright.sync_api import expect
+
+    source, destination = workspace_files
+    with browser.new_context() as context:
+        page = context.new_page()
+        _open_workspace(page, workspace_files)
+        page.get_by_role("button", name="Source 1", exact=True).click()
+        page.get_by_role("button", name="Source 2", exact=True).click(modifiers=["Shift"])
+        page.get_by_role("button", name="Move to top", exact=True).click()
+        reordered = ["Source 1", "Source 2", "Source 0", "Source 3"]
+        expect(page.locator(".pb-play-button")).to_have_text(reordered)
+        page.get_by_role("button", name=f"Playbook actions for {source.name}", exact=True).click()
+        page.get_by_role("menuitem", name="Merge into", exact=True).click()
+        page.get_by_role("menuitem", name=destination.name, exact=True).click()
+        expect(page.locator(".pb-play-button")).to_have_text([*reordered, "Destination 0", "Destination 1"])
+        page.get_by_role("tab", name=source.name, exact=True).click()
+        expect(page.locator(".pb-play-button")).to_have_text(reordered)
+
+
+def test_workspace_drag_between_books(browser: "Browser", workspace_files: tuple[Path, Path]) -> None:
+    from playwright.sync_api import expect
+
+    source, destination = workspace_files
+    with browser.new_context() as context:
+        page = context.new_page()
+        _open_workspace(page, workspace_files)
+        page.locator('[aria-label="Drag Source 3"]').drag_to(
+            page.locator('[data-play-index="0"]'), target_position={"x": 15, "y": 2}
+        )
+        expect(page.locator(".pb-play-button")).to_have_text(["Source 3", "Source 0", "Source 1", "Source 2"])
+        page.locator('[aria-label="Drag Source 3"]').drag_to(page.get_by_role("tab", name=destination.name, exact=True))
+        expect(page.locator(".pb-play-button")).to_have_text(["Source 3", "Destination 0", "Destination 1"])
+        page.get_by_role("tab", name=source.name, exact=True).click()
+        expect(page.locator(".pb-play-button")).to_have_text(["Source 0", "Source 1", "Source 2"])
+
+
+def test_workspace_new_and_close(browser: "Browser", workspace_files: tuple[Path, Path]) -> None:
+    from playwright.sync_api import expect
+
+    source, _ = workspace_files
+    with browser.new_context() as context:
+        page = context.new_page()
+        _open_workspace(page, workspace_files)
+        page.get_by_role("button", name="New playbook", exact=True).click()
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_role("textbox", name="Playbook name", exact=True).fill("New.sav")
+        dialog.get_by_role("button", name="Create playbook", exact=True).click()
+        expect(page.get_by_role("tab", name="New.sav", exact=True)).to_have_attribute("aria-selected", "true")
+        expect(page.locator(".pb-play-button")).to_have_count(0)
+        page.get_by_role("button", name="New play", exact=True).click()
+        dialog.get_by_role("textbox", name="Formation", exact=True).fill("Twins Right")
+        dialog.get_by_role("textbox", name="Play name", exact=True).fill("New play")
+        dialog.get_by_role("button", name="Create play", exact=True).click()
+        expect(page.locator(".pb-play-button")).to_have_text(["New play"])
+        page.get_by_role("tab", name=source.name, exact=True).click()
+        expect(page.locator(".pb-play-button")).to_have_text([f"Source {i}" for i in range(4)])
+        page.get_by_role("tab", name="New.sav", exact=True).click()
+        page.get_by_role("button", name="Close New.sav", exact=True).click()
+        dialog.get_by_role("button", name="Cancel", exact=True).click()
+        expect(page.get_by_role("tab", name="New.sav", exact=True)).to_have_count(1)
+        expect(page.locator(".pb-play-button")).to_have_text(["New play"])
+        page.get_by_role("button", name="Close New.sav", exact=True).click()
+        dialog.get_by_role("button", name="Close without downloading", exact=True).click()
+        expect(page.get_by_role("tab", name="New.sav", exact=True)).to_have_count(0)
+        expect(page.get_by_role("tab")).to_have_count(2)
+
+
 def _check_copy_link(page: "Page", expected_url: str, warning: str | None = None) -> None:
     from playwright.sync_api import expect
 
@@ -178,7 +316,7 @@ def test_quickshare_round_trip(
 
     for artifact, expected in artifacts:
         _check_preview(browser, artifact, expected[0].play_name)
-        _check_import(browser, artifact, recipient_file, expected, tmp_path / "imported.sav")
+        _check_import(browser, artifact, recipient_file, expected, tmp_path / "imported.sav", snapshot.kind)
 
 
 def _check_preview(browser: "Browser", artifact: str | Path, first_name: str) -> None:
@@ -207,7 +345,12 @@ def _check_preview(browser: "Browser", artifact: str | Path, first_name: str) ->
 
 
 def _check_import(
-    browser: "Browser", artifact: str | Path, recipient_file: Path, plays: tuple["GridironPlay", ...], downloaded: Path
+    browser: "Browser",
+    artifact: str | Path,
+    recipient_file: Path,
+    plays: tuple["GridironPlay", ...],
+    downloaded: Path,
+    kind: Literal["play", "playbook"] = "play",
 ) -> None:
     from playwright.sync_api import expect
 
@@ -224,23 +367,34 @@ def _check_import(
             dialog.get_by_role("textbox", name="Share link", exact=True).fill(artifact)
         dialog.get_by_role("button", name="Import", exact=True).click()
         expect(dialog).to_have_count(0)
-        ordered_names = [play.play_name for play in (*plays, *original.root.properties.custom_plays)]
+        combined = plays if kind == "playbook" else (*plays, *original.root.properties.custom_plays)
+        ordered_names = [play.play_name for play in combined]
         expect(page.locator(".pb-play-button")).to_have_text(ordered_names)
         first = page.get_by_role("button", name=plays[0].play_name, exact=True)
         expect(first).to_have_attribute("aria-current", "true")
         last = page.get_by_role("button", name=plays[-1].play_name, exact=True)
         expect(last).to_be_visible()
-        page.get_by_role("button", name="Undo", exact=True).click()
-        expect(last).to_have_count(0)
-        expect(page.get_by_role("button", name="Undo", exact=True)).to_be_disabled()
-        page.get_by_role("button", name="Redo", exact=True).click()
-        expect(last).to_be_visible()
+        if kind == "playbook":
+            expect(page.get_by_role("tab")).to_have_count(2)
+            expect(page.get_by_role("button", name="Undo", exact=True)).to_be_disabled()
+            page.get_by_role("tab", name=recipient_file.name, exact=True).click()
+            expect(page.locator(".pb-play-button")).to_have_text(
+                [play.play_name for play in original.root.properties.custom_plays]
+            )
+            page.get_by_role("tab").last.click()
+            expect(page.locator(".pb-play-button")).to_have_text(ordered_names)
+        else:
+            page.get_by_role("button", name="Undo", exact=True).click()
+            expect(last).to_have_count(0)
+            expect(page.get_by_role("button", name="Undo", exact=True)).to_be_disabled()
+            page.get_by_role("button", name="Redo", exact=True).click()
+            expect(last).to_be_visible()
         with page.expect_download() as transfer:
             page.get_by_role("button", name="Download .sav", exact=True).click()
         transfer.value.save_as(downloaded)
 
     reopened = sav_to_playbook(downloaded.read_bytes())
-    assert reopened == _with_plays(original, (*plays, *original.root.properties.custom_plays))
+    assert reopened == _with_plays(original, combined)
 
 
 @pytest.mark.parametrize("as_file", [False, True], ids=["v1-link", "v1-file"])
@@ -344,5 +498,7 @@ def test_import_link_exceeding_socket_message_limit(browser: "Browser", recipien
         dialog.get_by_role("button", name="Import", exact=True).click()
         imported = page.get_by_role("button", name="Long-link play 4", exact=True)
         expect(imported).to_be_visible(timeout=30_000)
-        page.get_by_role("button", name="Undo", exact=True).click()
+        expect(page.get_by_role("tab")).to_have_count(2)
+        page.get_by_role("tab", name=recipient_file.name, exact=True).click()
         expect(imported).to_have_count(0)
+        expect(page.locator(".pb-play-button").first).to_have_text(original.play_name)

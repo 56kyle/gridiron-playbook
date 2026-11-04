@@ -8,10 +8,12 @@ from gridiron_playbook.playbook import json_to_playbook
 from gridiron_playbook.playbook import playbook_to_sav
 from gridiron_playbook.playbook import sav_to_playbook
 from gridiron_playbook.quickshare.snapshot import ShareSnapshot
+from gridiron_playbook.workspace import DEFAULT_MAX_SAVE_BYTES
+from gridiron_playbook.workspace import document_with_plays
 
 
 _MIB: int = 1024 * 1024
-MAX_SAVE_BYTES: int = 64 * _MIB
+MAX_SAVE_BYTES: int = DEFAULT_MAX_SAVE_BYTES
 MAX_JSON_BYTES: int = 16 * _MIB
 
 
@@ -33,7 +35,9 @@ def validate_upload_size(name: str, size: int) -> None:
 
 
 def validate_import_size(recipient: GridironPlaybook, snapshot: ShareSnapshot) -> None:
-    """Check that the combined document can be downloaded and reopened before applying an import."""
+    """Check the resulting tab's save size before applying a share import."""
+    if snapshot.kind == "playbook":
+        recipient = document_with_plays(recipient, ())
     prospective = PlaybookEditor(recipient)
     _ = prospective.import_plays(snapshot.plays)
     try:

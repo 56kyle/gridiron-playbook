@@ -2,12 +2,20 @@
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
+from dataclasses import field
 from functools import partial
+from html import escape
 from itertools import groupby
 from pathlib import Path
+from typing import ClassVar
+from typing import Literal
+from typing import Protocol
 
 from nicegui import events
 from nicegui import ui
+from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import ValidationError
 
 from gridiron_playbook.block import route_yards_without_blocks
@@ -28,6 +36,8 @@ from gridiron_playbook.web.playbook_files import decode_uploaded_playbook
 from gridiron_playbook.web.playbook_files import validate_upload_size
 from gridiron_playbook.web.share_dialog import import_dialog
 from gridiron_playbook.web.share_dialog import publish_dialog
+from gridiron_playbook.workspace import PlaybookWorkspace
+from gridiron_playbook.workspace import document_with_plays
 
 
 def playbook_page() -> None:
@@ -40,23 +50,79 @@ class _EditorWorkspace(ui.element, component="editor_workspace.js"):
     """Scope keyboard shortcuts to the open playbook."""
 
 
+class _WorkspaceSurface(ui.element, component="workspace_surface.js"):
+    """Route drag gestures between play lists and playbook tabs."""
+
+    def set_context(self, generation: int, tab_id: str, selected: set[int], *, disabled: bool) -> None:
+        self._props.update(generation=generation, activeTab=tab_id, selected=sorted(selected), disabled=disabled)
+        self.update()
+
+
+class _ControlEvent(Protocol):
+    args: object
+
+
+@dataclass
+class _TabView:
+    formation: str | None = None
+    search: str = ""
+    play_index: int = 0
+    route_index: int | None = None
+    selected: set[int] = field(default_factory=set)
+    anchor: int | None = None
+
+
+class _PlayClick(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(strict=True, frozen=True)
+    shift: bool = False
+    toggle: bool = False
+
+
+class _PlayDrop(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(strict=True, frozen=True)
+    generation: int
+    source: str
+    destination: str
+    indices: list[int]
+    insertion: int
+    is_copy: bool
+
+
 class _PlaybookPage:
     def __init__(self) -> None:
-        self.container: ui.column = ui.column().classes("pb-app")
-        self.editor: PlaybookEditor | None = None
-        self.filename: str = ""
-        self.formation: str | None = None
-        self.search: str = ""
-        self.play_index: int = 0
-        self.route_index: int | None = None
+        self.books: PlaybookWorkspace = PlaybookWorkspace()
+        self.views: dict[str, _TabView] = {}
+        self.view: _TabView = _TabView()
+        self.container: _WorkspaceSurface = _WorkspaceSurface().classes("pb-app")
+        _ = self.container.on("drop_plays", self._drop_plays)
         self.draft_slot: int | None = None
         self.generation: int = 0
         self._file_chooser: ui.upload | None = None
         self._quickshare_dialog: ui.dialog | None = None
 
+    @property
+    def editor(self) -> PlaybookEditor | None:
+        return self.books.active.editor if self.books.active is not None else None
+
+    @property
+    def filename(self) -> str:
+        return self.books.active.filename if self.books.active is not None else ""
+
     def render(self, *, selected_point: int | None = None) -> None:
         """Replace the page controls and invalidate gestures from the old diagram."""
+        self.books.checkpoint()
+        active = self.books.active
+        if active is not None:
+            self.view = self.views.setdefault(active.id, _TabView())
+            self.view.play_index = min(self.view.play_index, max(0, len(active.editor.plays) - 1))
+            self.view.selected.intersection_update(range(len(active.editor.plays)))
         self.generation += 1
+        self.container.set_context(
+            self.generation,
+            active.id if active is not None else "",
+            self.view.selected,
+            disabled=self.draft_slot is not None,
+        )
         self._file_chooser = None
         if self._quickshare_dialog is not None and not self._quickshare_dialog.is_deleted:
             _ = self._quickshare_dialog.close()
@@ -67,8 +133,6 @@ class _PlaybookPage:
                 with ui.row().classes("pb-brand"):
                     _ = ui.icon("sports_football").classes("pb-brand-icon")
                     _ = ui.label("Gridiron").classes("pb-brand-name")
-                    if self.filename:
-                        _ = ui.label(self.filename).classes("pb-file")
                 if self.editor is not None:
                     with ui.row().classes("pb-actions").style("flex-wrap:wrap;max-width:100%"):
                         _ = ui.button("Open playbook", icon="folder_open", on_click=self._open_dialog).props(
@@ -89,6 +153,8 @@ class _PlaybookPage:
                         _ = ui.button("Download .sav", icon="download", on_click=self._download).props(
                             "unelevated no-caps"
                         )
+            if self.books.tabs:
+                self._tabs()
             if self.editor is None:
                 self._welcome()
             else:
@@ -100,10 +166,153 @@ class _PlaybookPage:
             _ = ui.label("Open your playbook").classes("pb-display")
             self._upload_control()
 
+    def _can_leave_draft(self) -> bool:
+        if self.draft_slot is None:
+            return True
+        ui.notify("Finish or cancel the route first.", type="warning")
+        return False
+
+    def _unique_filename(self, filename: str, excluding: str | None = None) -> str:
+        existing = {tab.filename for tab in self.books.tabs if tab.id != excluding}
+        path = Path(filename)
+        candidate = filename
+        suffix = 2
+        while candidate in existing:
+            candidate = f"{path.stem} ({suffix}){path.suffix}"
+            suffix += 1
+        return candidate
+
+    def _tabs(self) -> None:
+        with ui.row().classes("pb-tabbar").props('role="tablist" aria-label="Playbooks"'):
+            for tab in self.books.tabs:
+                selected = tab is self.books.active
+                with ui.row().classes("pb-tab-shell").props(f'data-tab-id="{tab.id}"'):
+                    button = (
+                        ui.button(tab.filename, on_click=partial(self._activate, tab.id))
+                        .props(f'flat no-caps role="tab" aria-selected="{str(selected).lower()}"')
+                        .classes("pb-tab")
+                    )
+                    if selected:
+                        _ = button.classes("pb-tab-active")
+                    if tab.dirty:
+                        _ = ui.icon("circle").classes("pb-dirty").props('aria-label="Unsaved changes"')
+                    with (
+                        ui.button(icon="more_horiz").props(
+                            f'flat round dense aria-label="Playbook actions for {escape(tab.filename, quote=True)}"'
+                        ),
+                        ui.menu(),
+                    ):
+                        _ = ui.menu_item("Rename playbook", on_click=partial(self._rename_book_dialog, tab.id)).props(
+                            'role="menuitem"'
+                        )
+                        with (
+                            ui.menu_item("Merge into", auto_close=False)
+                            .props('role="menuitem" aria-label="Merge into"')
+                            .set_enabled(len(self.books.tabs) > 1 and bool(tab.editor.plays)),
+                            ui.menu().props('anchor="top end" self="top start"'),
+                        ):
+                            for destination in self.books.tabs:
+                                if destination.id != tab.id:
+                                    _ = ui.menu_item(
+                                        destination.filename,
+                                        on_click=partial(
+                                            self._transfer,
+                                            tab.id,
+                                            tuple(range(len(tab.editor.plays))),
+                                            destination.id,
+                                            "copy",
+                                        ),
+                                    ).props('role="menuitem"')
+                    _ = ui.button(icon="close", on_click=partial(self._close_book, tab.id)).props(
+                        f'flat round dense aria-label="Close {escape(tab.filename, quote=True)}"'
+                    )
+            _ = (
+                ui.button(icon="add", on_click=self._new_book_dialog)
+                .props('flat round dense aria-label="New playbook"')
+                .tooltip("New playbook")
+            )
+
+    def _activate(self, tab_id: str) -> None:
+        if not self._can_leave_draft():
+            return
+        self.books.activate(tab_id)
+        self.render()
+
+    def _new_book_dialog(self) -> None:
+        editor = self.editor
+        if editor is None or not self._can_leave_draft():
+            return
+        with ui.dialog() as dialog, ui.card().classes("pb-dialog"):
+            _ = ui.label("New playbook").classes("pb-heading")
+            name = ui.input("Playbook name", value="Untitled.sav").classes("w-full")
+
+            def create() -> None:
+                filename = (name.value or "").strip()
+                if not filename:
+                    raise ValueError("Enter a playbook name.")
+                _ = self.books.add(document_with_plays(editor.playbook, ()), self._unique_filename(filename))
+                self.render()
+
+            self._dialog_actions(dialog, "Create playbook", create)
+        _ = dialog.open()
+
+    def _rename_book_dialog(self, tab_id: str) -> None:
+        if not self._can_leave_draft():
+            return
+        tab = self.books.get_tab(tab_id)
+        with ui.dialog() as dialog, ui.card().classes("pb-dialog"):
+            _ = ui.label("Rename playbook").classes("pb-heading")
+            name = ui.input("Playbook name", value=tab.filename).classes("w-full")
+
+            def rename() -> None:
+                filename = (name.value or "").strip()
+                if not filename:
+                    raise ValueError("Enter a playbook name.")
+                tab.filename = self._unique_filename(filename, tab_id)
+                self.render()
+
+            self._dialog_actions(dialog, "Rename playbook", rename)
+        _ = dialog.open()
+
+    def _close_book(self, tab_id: str) -> None:
+        if not self._can_leave_draft():
+            return
+        tab = self.books.get_tab(tab_id)
+
+        def close() -> None:
+            self.books.close(tab_id)
+            self.render()
+
+        if not tab.dirty:
+            close()
+            return
+        with ui.dialog() as dialog, ui.card().classes("pb-dialog"):
+            _ = ui.label(f"Close {tab.filename}?").classes("pb-heading")
+            generation = self.generation
+
+            async def download_and_close() -> None:
+                document = tab.editor.playbook
+                if (
+                    await self._download_tab(tab_id)
+                    and self.generation == generation
+                    and not dialog.is_deleted
+                    and dialog.value
+                    and tab.editor.playbook is document
+                ):
+                    _ = dialog.close()
+                    close()
+
+            _ = ui.button("Download and close", icon="download", on_click=download_and_close).props(
+                "unelevated no-caps"
+            )
+            self._dialog_actions(dialog, "Close without downloading", close)
+        _ = dialog.open()
+
     def _open_dialog(self) -> None:
+        if not self._can_leave_draft():
+            return
         with ui.dialog() as dialog, ui.card().classes("pb-dialog"):
             _ = ui.label("Open playbook").classes("pb-heading")
-            _ = ui.label("Opening a file replaces this tab's playbook and edit history.")
             self._upload_control(dialog)
             _ = ui.button("Cancel", on_click=dialog.close).props("flat no-caps")
         _ = dialog.on("hide", dialog.delete)
@@ -135,10 +344,8 @@ class _PlaybookPage:
                 return
             if request != latest_request or not chooser_is_open():
                 return
-            self.editor = PlaybookEditor(document)
-            self.filename = name
-            self.formation = None
-            self.search = ""
+            tab = self.books.add(document, self._unique_filename(name))
+            self.view = self.views.setdefault(tab.id, _TabView())
             if dialog is not None:
                 _ = dialog.close()
             self._select_play(0)
@@ -158,15 +365,25 @@ class _PlaybookPage:
         self._file_chooser = chooser
 
     async def _download(self) -> None:
-        if self.editor is None:
+        active = self.books.active
+        if active is None:
             return
-        filename: str = f"{Path(self.filename).stem}.sav"
+        generation = self.generation
+        if await self._download_tab(active.id) and self.generation == generation:
+            self.render()
+
+    async def _download_tab(self, tab_id: str) -> bool:
+        tab = self.books.get_tab(tab_id)
+        document = tab.editor.playbook
+        filename: str = f"{Path(tab.filename).stem}.sav"
         try:
-            contents: bytes = await asyncio.to_thread(playbook_to_sav, self.editor.playbook)
+            contents: bytes = await asyncio.to_thread(playbook_to_sav, document)
         except ValueError as error:
             ui.notify(f"Could not encode playbook. {str(error)[:250]}", type="negative")
-            return
+            return False
         ui.download.content(contents, filename=filename, media_type="application/octet-stream")
+        self.books.mark_saved(tab_id, document)
+        return True
 
     def _open_quickshare(self, editor: PlaybookEditor, open_dialog: Callable[[Callable[[], bool]], ui.dialog]) -> None:
         if self.editor is not editor:
@@ -195,36 +412,197 @@ class _PlaybookPage:
 
     def _import_share(self, editor: PlaybookEditor) -> None:
         def import_and_select(snapshot: ShareSnapshot) -> None:
-            index: int = editor.import_plays(snapshot.plays)
-            self.formation = None
-            self.search = ""
+            if snapshot.kind == "playbook":
+                tab = self.books.add(
+                    document_with_plays(editor.playbook, snapshot.plays), self._unique_filename("Shared playbook.sav")
+                )
+                self.view = self.views.setdefault(tab.id, _TabView())
+                self._select_play(0)
+                return
+            index = editor.import_plays(snapshot.plays)
+            self.view.formation = None
+            self.view.search = ""
             self._select_play(index)
 
         self._open_quickshare(editor, partial(import_dialog, editor.playbook, import_and_select))
 
     def _select_play(self, index: int) -> None:
-        self.play_index = index
-        self.route_index = None
+        self.view.play_index = index
+        self.view.selected = {index} if self.editor is not None and self.editor.plays else set()
+        self.view.anchor = index
+        self.view.route_index = None
         self.draft_slot = None
         self.render()
 
     def _set_filter(self, formation: str | None) -> None:
-        self.formation = formation
-        self._select_play(self.play_index)
+        self.view.formation = formation
+        self._select_play(self.view.play_index)
 
     def _history_change(self, operation: Callable[[], None]) -> None:
         operation()
-        self._select_play(self.play_index)
+        for view in self.views.values():
+            view.selected.clear()
+            view.anchor = None
+            view.route_index = None
+        if self.books.active is not None:
+            self.view = self.views.setdefault(self.books.active.id, _TabView())
+        self._select_play(self.view.play_index)
+
+    def _transfer(
+        self,
+        source_id: str,
+        indices: tuple[int, ...],
+        destination_id: str,
+        action: Literal["copy", "move"],
+        insertion: int = 0,
+    ) -> None:
+        if not self._can_leave_draft():
+            return
+        try:
+            operation = self.books.copy_plays if action == "copy" else self.books.move_plays
+            selected = operation(source_id, indices, destination_id, insertion)
+            self.books.activate(destination_id)
+        except (KeyError, IndexError, ValueError) as error:
+            ui.notify(str(error), type="negative")
+            return
+        for tab_id in (source_id, destination_id):
+            view = self.views.setdefault(tab_id, _TabView())
+            view.selected.clear()
+            view.anchor = None
+            view.route_index = None
+        self.view = self.views[destination_id]
+        self.view.selected = set(selected)
+        self.view.play_index = selected[0]
+        self.view.anchor = selected[0]
+        self.view.formation = None
+        self.view.search = ""
+        self.render()
+
+    def _drop_plays(self, event: _ControlEvent) -> None:
+        try:
+            dropped = _PlayDrop.model_validate(event.args)
+        except ValidationError:
+            return
+        if dropped.generation != self.generation:
+            return
+        self._transfer(
+            dropped.source,
+            tuple(dropped.indices),
+            dropped.destination,
+            "copy" if dropped.is_copy and dropped.source != dropped.destination else "move",
+            dropped.insertion,
+        )
+
+    def _reorder(self, position: Literal["top", "up", "down", "bottom"]) -> None:
+        active = self.books.active
+        selection = tuple(sorted(self.view.selected))
+        if active is None or not selection:
+            return
+        insertion = {
+            "top": 0,
+            "up": max(0, selection[0] - 1),
+            "down": min(len(active.editor.plays), selection[-1] + 2),
+            "bottom": len(active.editor.plays),
+        }[position]
+        self._transfer(active.id, selection, active.id, "move", insertion)
+
+    def _pick_play(self, index: int, matches: tuple[int, ...], event: _ControlEvent) -> None:
+        if not self._can_leave_draft():
+            return
+        try:
+            click = _PlayClick.model_validate(event.args)
+        except ValidationError:
+            return
+        if click.shift and self.view.anchor in matches:
+            first, last = sorted((matches.index(self.view.anchor), matches.index(index)))
+            span = set(matches[first : last + 1])
+            self.view.selected = self.view.selected | span if click.toggle else span
+        elif click.toggle:
+            self.view.selected.symmetric_difference_update({index})
+            self.view.anchor = index
+        else:
+            self.view.selected = {index}
+            self.view.anchor = index
+        self.view.play_index = index
+        self.view.route_index = None
+        self.render()
+
+    def _toggle_play(self, index: int) -> None:
+        if not self._can_leave_draft():
+            return
+        self.view.selected.symmetric_difference_update({index})
+        self.view.anchor = index
+        self.render()
+
+    def _select_all(self, matches: tuple[int, ...]) -> None:
+        if not self._can_leave_draft():
+            return
+        if set(matches).issubset(self.view.selected):
+            self.view.selected.difference_update(matches)
+        else:
+            self.view.selected.update(matches)
+        self.render()
+
+    def _selection_controls(self, editor: PlaybookEditor, matches: tuple[int, ...]) -> None:
+        active = self.books.active
+        if active is None:
+            return
+        selected = tuple(sorted(self.view.selected))
+        with ui.row().classes("pb-selection"):
+            _ = (
+                ui.checkbox(
+                    value=bool(matches) and set(matches).issubset(selected),
+                    on_change=partial(self._select_all, matches),
+                )
+                .props('dense aria-label="Select all visible plays"')
+                .set_enabled(bool(matches) and self.draft_slot is None)
+            )
+            _ = ui.label(str(len(selected))).classes("pb-selection-count")
+            transfers: tuple[tuple[str, Literal["copy", "move"]], ...] = (
+                ("Copy to", "copy"),
+                ("Move to", "move"),
+            )
+            for label, action in transfers:
+                with (
+                    ui.dropdown_button(label, auto_close=True)
+                    .props(f'flat dense no-caps aria-label="{label}"')
+                    .set_enabled(bool(selected) and len(self.books.tabs) > 1 and self.draft_slot is None)
+                ):
+                    for destination in self.books.tabs:
+                        if destination.id != active.id:
+                            _ = ui.item(
+                                destination.filename,
+                                on_click=partial(self._transfer, active.id, selected, destination.id, action),
+                            ).props('role="menuitem"')
+        if selected:
+            with ui.row().classes("pb-order-actions"):
+                positions: tuple[tuple[str, Literal["top", "up", "down", "bottom"], str], ...] = (
+                    ("Move to top", "top", "vertical_align_top"),
+                    ("Move up", "up", "arrow_upward"),
+                    ("Move down", "down", "arrow_downward"),
+                    ("Move to bottom", "bottom", "vertical_align_bottom"),
+                )
+                for label, position, icon in positions:
+                    disabled = (position in ("top", "up") and selected == tuple(range(len(selected)))) or (
+                        position in ("down", "bottom")
+                        and selected == tuple(range(len(editor.plays) - len(selected), len(editor.plays)))
+                    )
+                    _ = (
+                        ui.button(icon=icon, on_click=partial(self._reorder, position))
+                        .props(f'flat dense aria-label="{label}"')
+                        .tooltip(label)
+                        .set_enabled(not disabled and self.draft_slot is None)
+                    )
 
     def _workspace(self, editor: PlaybookEditor, selected_point: int | None) -> None:
         plays: tuple[GridironPlay, ...] = editor.plays
         formations: list[str] = sorted({p.formation_name for p in plays}, key=str.casefold)
-        if self.formation not in formations:
-            self.formation = None
-        visible: list[int] = [i for i, play in enumerate(plays) if self.formation in (None, play.formation_name)]
-        if visible and self.play_index not in visible:
-            self.play_index = visible[0]
-            self.route_index = None
+        if self.view.formation not in formations:
+            self.view.formation = None
+        visible: list[int] = [i for i, play in enumerate(plays) if self.view.formation in (None, play.formation_name)]
+        if visible and self.view.play_index not in visible:
+            self.view.play_index = visible[0]
+            self.view.route_index = None
             self.draft_slot = None
         with _EditorWorkspace().classes("pb-workspace"):
             self._library(editor, formations, visible)
@@ -232,29 +610,31 @@ class _PlaybookPage:
                 with ui.row().classes("pb-board-header"):
                     with ui.column().classes("pb-title-group"):
                         if plays:
-                            _ = ui.label(plays[self.play_index].formation_name).classes("pb-formation")
-                        _ = ui.label(plays[self.play_index].play_name if plays else "No plays yet").classes("pb-title")
+                            _ = ui.label(plays[self.view.play_index].formation_name).classes("pb-formation")
+                        _ = ui.label(plays[self.view.play_index].play_name if plays else "No plays yet").classes(
+                            "pb-title"
+                        )
                     with ui.row().classes("pb-actions"):
                         self._history_button(
                             "Undo",
-                            partial(self._history_change, editor.undo),
-                            editor.can_undo and self.draft_slot is None,
+                            partial(self._history_change, self.books.undo),
+                            self.books.can_undo and self.draft_slot is None,
                             "Control+Z Meta+Z",
                             "Ctrl/⌘+Z",
                         )
                         self._history_button(
                             "Redo",
-                            partial(self._history_change, editor.redo),
-                            editor.can_redo and self.draft_slot is None,
+                            partial(self._history_change, self.books.redo),
+                            self.books.can_redo and self.draft_slot is None,
                             "Control+Shift+Z Meta+Shift+Z Control+Y",
                             "Ctrl/⌘+Shift+Z or Ctrl+Y",
                         )
                 if plays:
-                    self._diagram(editor, plays[self.play_index], self.play_index, selected_point)
+                    self._diagram(editor, plays[self.view.play_index], self.view.play_index, selected_point)
                 else:
                     _ = ui.icon("route").classes("pb-empty-diagram")
             if plays:
-                self._inspector(editor, plays[self.play_index])
+                self._inspector(editor, plays[self.view.play_index])
 
     def _library(self, editor: PlaybookEditor, formations: list[str], visible: list[int]) -> None:
         with ui.element("nav").classes("pb-library").props('aria-label="Play library"'):
@@ -264,49 +644,83 @@ class _PlaybookPage:
                     ui.button("New play", icon="add", on_click=partial(self._new_play_dialog, editor))
                     .props("flat dense no-caps")
                     .classes("pb-create-play")
+                    .mark("new-play")
                 )
             search: ui.input = (
-                ui.input(placeholder="Find a play", value=self.search)
+                ui.input(placeholder="Find a play", value=self.view.search)
                 .props('dense outlined clearable aria-label="Find a play"')
                 .classes("pb-search")
             )
             with search.add_slot("prepend"):
                 _ = ui.icon("search")
             with (
-                ui.dropdown_button(self.formation or "All formations", auto_close=True)
+                ui.dropdown_button(self.view.formation or "All formations", auto_close=True)
                 .props("flat dense no-caps align=between")
                 .classes("pb-filter")
             ):
                 _ = ui.item("All formations", on_click=partial(self._set_filter, None))
                 for formation in formations:
                     _ = ui.item(formation, on_click=partial(self._set_filter, formation))
+            selection_controls = ui.column().classes("pb-selection-controls")
             listing: ui.column = ui.column().classes("pb-plays")
+            active = self.books.active
+            if active is not None:
+                _ = listing.props(f'data-play-list="{active.id}" data-play-count="{len(editor.plays)}"')
 
             def filter_plays() -> None:
-                self.search = search.value or ""
-                query: str = self.search.strip().casefold()
+                self.view.search = search.value or ""
+                query: str = self.view.search.strip().casefold()
                 matches: list[int] = []
                 for index in visible:
                     play: GridironPlay = editor.plays[index]
                     if query in play.play_name.casefold() or query in play.formation_name.casefold():
                         matches.append(index)
+                _ = selection_controls.clear()
+                with selection_controls:
+                    self._selection_controls(editor, tuple(matches))
                 _ = listing.clear()
                 with listing:
                     if not matches:
                         _ = ui.label("No matches" if query else "No plays").classes("pb-list-empty")
-                    for formation, indices in groupby(matches, key=lambda index: editor.plays[index].formation_name):
-                        with ui.column().classes("pb-group"):
-                            if self.formation is None and len(formations) > 1:
-                                _ = ui.label(formation).classes("pb-group-name")
-                            for index in indices:
-                                name: str = editor.plays[index].play_name or "(Unnamed play)"
-                                button: ui.button = ui.button(name, on_click=partial(self._select_play, index))
-                                _ = button.props("flat no-caps align=left").classes("pb-play-button")
-                                if index == self.play_index:
-                                    _ = button.classes("pb-active").props('aria-current="true"')
+                    self._play_rows(editor, matches, formations)
 
             _ = search.on_value_change(filter_plays)
             filter_plays()
+
+    def _play_rows(self, editor: PlaybookEditor, matches: list[int], formations: list[str]) -> None:
+        for formation, indices in groupby(matches, key=lambda index: editor.plays[index].formation_name):
+            with ui.column().classes("pb-group"):
+                if self.view.formation is None and len(formations) > 1:
+                    _ = ui.label(formation).classes("pb-group-name")
+                for index in indices:
+                    name: str = editor.plays[index].play_name or "(Unnamed play)"
+                    with ui.row().classes("pb-play-row").props(f'data-play-index="{index}"') as row:
+                        if index in self.view.selected:
+                            _ = row.classes("pb-row-selected")
+                        _ = (
+                            ui.icon("drag_indicator")
+                            .classes("pb-drag-handle")
+                            .props(
+                                f'draggable="true" data-drag-play="{index}" aria-label="Drag {escape(name, quote=True)}"'
+                            )
+                        )
+                        _ = (
+                            ui.checkbox(
+                                value=index in self.view.selected,
+                                on_change=partial(self._toggle_play, index),
+                            )
+                            .props(f'dense aria-label="Select {escape(name, quote=True)}"')
+                            .set_enabled(self.draft_slot is None)
+                        )
+                        button: ui.button = ui.button(name)
+                        _ = button.on(
+                            "click",
+                            partial(self._pick_play, index, tuple(matches)),
+                            js_handler="(event) => emit({shift: event.shiftKey, toggle: event.ctrlKey || event.metaKey})",
+                        )
+                        _ = button.props("flat no-caps align=left").classes("pb-play-button")
+                        if index == self.view.play_index:
+                            _ = button.classes("pb-active").props('aria-current="true"')
 
     @staticmethod
     def _history_button(label: str, action: Callable[[], None], enabled: bool, keys: str, hint: str) -> None:
@@ -344,10 +758,12 @@ class _PlaybookPage:
                     .set_enabled(self.draft_slot is None)
                 )
                 _ = ui.button(
-                    "Rename", icon="edit", on_click=partial(self._rename_dialog, editor, self.play_index)
+                    "Rename", icon="edit", on_click=partial(self._rename_dialog, editor, self.view.play_index)
                 ).props("flat dense no-caps")
                 _ = ui.button(
-                    "Duplicate", icon="content_copy", on_click=partial(self._duplicate_dialog, editor, self.play_index)
+                    "Duplicate",
+                    icon="content_copy",
+                    on_click=partial(self._duplicate_dialog, editor, self.view.play_index),
                 ).props("flat dense no-caps")
 
     def _lineup_row(self, play: GridironPlay, slot: int, route_index: int | None) -> None:
@@ -359,7 +775,7 @@ class _PlaybookPage:
             tooltip: str = f"Draw route · Slot {slot}"
         else:
             button = ui.button(on_click=partial(self._select_route, route_index))
-            selected: bool = route_index == self.route_index
+            selected: bool = route_index == self.view.route_index
             start: tuple[float, float] | None = formation_starts(play.formation_name).get(slot)
             yards: str = f"{route_yards_without_blocks(play.routes[route_index], start):.0f}"
             yardage = "1 yd" if yards == "1" else f"{yards} yds"
@@ -381,11 +797,11 @@ class _PlaybookPage:
 
     def _start_drawing(self, slot: int) -> None:
         self.draft_slot = slot
-        self.route_index = None
+        self.view.route_index = None
         self.render()
 
     def _select_route(self, index: int) -> None:
-        self.route_index = index
+        self.view.route_index = index
         self.draft_slot = None
         self.render()
 
@@ -411,7 +827,7 @@ class _PlaybookPage:
 
         _ = PlayDiagram(
             play,
-            selected_route=self.route_index,
+            selected_route=self.view.route_index,
             draft_slot=self.draft_slot,
             initial_point=selected_point,
             node_actions=self._node_actions(editor, index, play, edit_point),
@@ -423,7 +839,7 @@ class _PlaybookPage:
         )
 
     def _edit_point(self, generation: int, route: int, selection: int, operation: Callable[[], None]) -> None:
-        if generation != self.generation or route != self.route_index:
+        if generation != self.generation or route != self.view.route_index:
             return
         try:
             operation()
@@ -471,7 +887,8 @@ class _PlaybookPage:
             )
             formation: ui.input = ui.input(
                 "Formation",
-                value=self.formation or (editor.plays[self.play_index].formation_name if editor.plays else ""),
+                value=self.view.formation
+                or (editor.plays[self.view.play_index].formation_name if editor.plays else ""),
                 autocomplete=formation_names,
             ).classes("w-full")
             with (
@@ -484,8 +901,8 @@ class _PlaybookPage:
 
             def create() -> None:
                 index: int = editor.create_play(formation.value or "", name.value or "")
-                self.formation = None
-                self.search = ""
+                self.view.formation = None
+                self.view.search = ""
                 self._select_play(index)
 
             self._dialog_actions(dialog, "Create play", create)

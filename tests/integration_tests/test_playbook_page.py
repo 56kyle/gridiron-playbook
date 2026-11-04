@@ -72,7 +72,7 @@ async def test_playbook_page_with_custom_formation_and_slot(custom_plays_json: s
         _ = await user.open("/")
         await _upload(user, "original.json", custom_plays_json.encode())
         await user.should_see("original.json")
-        _ = user.find("New play").click()
+        _ = user.find(marker="new-play").click()
         _ = user.find(kind=ui.input, content="Formation").type("Custom spread")
         _ = user.find(kind=ui.input, content="Play name").type("Flat")
         _ = user.find("Create play").click()
