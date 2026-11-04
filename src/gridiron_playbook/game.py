@@ -1,4 +1,5 @@
 """Module containing logic used for interacting with Gridiron files."""
+
 from pathlib import Path
 
 from srctools.steam import AppInfo
@@ -14,7 +15,7 @@ def get_newest_gridiron_app_info() -> AppInfo:
     try:
         app_info: AppInfo = find_app(app_id=GRIDIRON_REMASTERED_APP_ID)
     except KeyError:
-        app_info: AppInfo = find_app(app_id=GRIDIRON_REMASTERED_PLAYTEST_APP_ID)
+        app_info = find_app(app_id=GRIDIRON_REMASTERED_PLAYTEST_APP_ID)
     return app_info
 
 
