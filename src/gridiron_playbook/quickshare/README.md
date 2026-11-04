@@ -18,7 +18,7 @@ Quickshare can represent a standard block with its anchor waypoint and facing. T
 
 **Copy link** copies links of up to 2,000 characters directly. At 2,001–4,000 characters, confirm the warning that the link exceeds the standard Discord message limit. Above 4,000, confirm the stronger warning that the link also exceeds the Nitro limit. For long playbooks, send the share file as an attachment. These counts apply to the link alone.
 
-Recipients can open a link in a browser or choose a local share file on the viewer page. To use the plays in the game, open the destination playbook in the editor and import the link or file. The plays are appended in order. **Undo** removes the entire import. **Download .sav** saves the result using the recipient's Unreal save metadata.
+Recipients can open a link in a browser or choose a local share file on the viewer page. To use the plays in the game, open the destination playbook in the editor and import the link or file. Imported plays appear at the top of the list in their original order. **Undo** removes the entire import. **Download .sav** saves the result using the recipient's Unreal save metadata.
 
 The viewer's **Download share file** button saves the received precision. For original coordinates, the sender can use **Download exact file** in their editor.
 

@@ -224,6 +224,10 @@ def _check_import(
             dialog.get_by_role("textbox", name="Share link", exact=True).fill(artifact)
         dialog.get_by_role("button", name="Import", exact=True).click()
         expect(dialog).to_have_count(0)
+        ordered_names = [play.play_name for play in (*plays, *original.root.properties.custom_plays)]
+        expect(page.locator(".pb-play-button")).to_have_text(ordered_names)
+        first = page.get_by_role("button", name=plays[0].play_name, exact=True)
+        expect(first).to_have_attribute("aria-current", "true")
         last = page.get_by_role("button", name=plays[-1].play_name, exact=True)
         expect(last).to_be_visible()
         page.get_by_role("button", name="Undo", exact=True).click()
@@ -236,7 +240,7 @@ def _check_import(
         transfer.value.save_as(downloaded)
 
     reopened = sav_to_playbook(downloaded.read_bytes())
-    assert reopened == _with_plays(original, (*original.root.properties.custom_plays, *plays))
+    assert reopened == _with_plays(original, (*plays, *original.root.properties.custom_plays))
 
 
 @pytest.mark.parametrize("as_file", [False, True], ids=["v1-link", "v1-file"])

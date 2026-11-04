@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Callable
 from functools import partial
+from itertools import groupby
 from pathlib import Path
 
 from nicegui import events
@@ -193,13 +194,13 @@ class _PlaybookPage:
             self._open_quickshare(editor, partial(publish_dialog, "play", (play,)))
 
     def _import_share(self, editor: PlaybookEditor) -> None:
-        def append(snapshot: ShareSnapshot) -> None:
+        def import_and_select(snapshot: ShareSnapshot) -> None:
             index: int = editor.import_plays(snapshot.plays)
             self.formation = None
             self.search = ""
             self._select_play(index)
 
-        self._open_quickshare(editor, partial(import_dialog, editor.playbook, append))
+        self._open_quickshare(editor, partial(import_dialog, editor.playbook, import_and_select))
 
     def _select_play(self, index: int) -> None:
         self.play_index = index
@@ -284,16 +285,16 @@ class _PlaybookPage:
             def filter_plays() -> None:
                 self.search = search.value or ""
                 query: str = self.search.strip().casefold()
-                groups: dict[str, list[int]] = {}
+                matches: list[int] = []
                 for index in visible:
                     play: GridironPlay = editor.plays[index]
                     if query in play.play_name.casefold() or query in play.formation_name.casefold():
-                        groups.setdefault(play.formation_name, []).append(index)
+                        matches.append(index)
                 _ = listing.clear()
                 with listing:
-                    if not groups:
+                    if not matches:
                         _ = ui.label("No matches" if query else "No plays").classes("pb-list-empty")
-                    for formation, indices in groups.items():
+                    for formation, indices in groupby(matches, key=lambda index: editor.plays[index].formation_name):
                         with ui.column().classes("pb-group"):
                             if self.formation is None and len(formations) > 1:
                                 _ = ui.label(formation).classes("pb-group-name")

@@ -41,10 +41,10 @@ def test_import_plays_with_large_share_file(
     share_file: Path = tmp_path / "full-book.gridironshare"
     _ = share_file.write_bytes(encode_share(large_snapshot))
     index = editor.import_plays(decode_share(share_file.read_bytes()).plays)
-    assert index == len(previous)
+    assert index == 0
     assert editor.revision == 1
     imported = editor.playbook
-    assert editor.plays == (*previous, *large_snapshot.plays)
+    assert editor.plays == (*large_snapshot.plays, *previous)
     editor.undo()
     assert editor.playbook == original
     assert not editor.can_undo
@@ -52,7 +52,7 @@ def test_import_plays_with_large_share_file(
     assert editor.playbook == imported
 
     reopened = sav_to_playbook(playbook_to_sav(imported))
-    assert reopened.root.properties.custom_plays == (*previous, *large_snapshot.plays)
+    assert reopened.root.properties.custom_plays == (*large_snapshot.plays, *previous)
     assert ends_with_block(reopened.root.properties.custom_plays[index].routes[0].points)
     unchanged = {"root": {"properties": {"custom_plays"}}}
     assert reopened.model_dump(exclude=unchanged, exclude_unset=True) == original.model_dump(
@@ -76,12 +76,12 @@ def test_decode_uploaded_playbook_with_dense_import(original: GridironPlaybook) 
     play = GridironPlay(FormationName_0="Twins Right", PlayName_0="Dense", Routes_0=(route,))
     incoming = ShareSnapshot(version=1, kind="playbook", plays=(play,) * 125)
     editor = PlaybookEditor(original)
-    first = editor.import_plays(incoming.plays)
+    _ = editor.import_plays(incoming.plays)
     data = playbook_to_sav(editor.playbook)
     assert len(data) > 16 * 1024 * 1024
 
     reopened = decode_uploaded_playbook("Imported.sav", data)
-    assert reopened.root.properties.custom_plays[first:] == incoming.plays
+    assert reopened.root.properties.custom_plays == (*incoming.plays, *original.root.properties.custom_plays)
 
 
 def test_validate_import_size_with_combined_oversized_save(
