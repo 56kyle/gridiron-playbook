@@ -126,7 +126,7 @@ def _digest(contents: bytes) -> str:
     return hashlib.sha256(contents).hexdigest()
 
 
-def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+def _stat_version(value: os.stat_result) -> tuple[int, int, int, int, int]:
     return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
 
 
@@ -250,14 +250,18 @@ class GamePlaybookStore:
 
     def _read_current(self) -> bytes:
         try:
-            if not self.save_path.is_file():
+            path_before: os.stat_result = self.save_path.stat()
+            if not stat.S_ISREG(path_before.st_mode):
                 raise GamePlaybookUnavailableError("Select an existing game save, then close Gridiron and try again.")
             with self.save_path.open("rb") as stream:
-                before = os.fstat(stream.fileno())
+                opened_before: os.stat_result = os.fstat(stream.fileno())
                 contents: bytes = stream.read()
-                after = os.fstat(stream.fileno())
-            if _stat_identity(before) != _stat_identity(after) or _stat_identity(after) != _stat_identity(
-                self.save_path.stat()
+                opened_after: os.stat_result = os.fstat(stream.fileno())
+                path_after: os.stat_result = self.save_path.stat()
+            if (
+                _stat_version(opened_before) != _stat_version(opened_after)
+                or _stat_version(path_before) != _stat_version(path_after)
+                or (opened_after.st_dev, opened_after.st_ino) != (path_after.st_dev, path_after.st_ino)
             ):
                 raise GamePlaybookChangedError("The game save changed while it was read. Close Gridiron and try again.")
             return contents

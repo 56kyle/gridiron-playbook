@@ -26,6 +26,9 @@ from gridiron_playbook.playbook import GridironPlaybook
 from gridiron_playbook.playbook import playbook_to_sav
 
 
+_DESCRIPTOR_CTIME_OFFSET_NS: int = 1_000_000_000
+
+
 @pytest.fixture
 def playbook(custom_plays_json: str) -> GridironPlaybook:
     return GridironPlaybook.model_validate_json(custom_plays_json)
@@ -69,6 +72,84 @@ def readonly_save(save_path: Path) -> Iterator[Path]:
         yield save_path
     finally:
         save_path.chmod(permissions)
+
+
+@pytest.fixture
+def descriptor_with_distinct_ctime(monkeypatch: pytest.MonkeyPatch, save_path: Path) -> None:
+    actual_fstat = os.fstat
+    target: os.stat_result = save_path.stat()
+
+    def fstat(descriptor: int) -> os.stat_result:
+        result: os.stat_result = actual_fstat(descriptor)
+        if (result.st_dev, result.st_ino) != (target.st_dev, target.st_ino):
+            return result
+        return os.stat_result(
+            result,
+            {
+                "st_atime_ns": result.st_atime_ns,
+                "st_mtime_ns": result.st_mtime_ns,
+                "st_ctime_ns": result.st_ctime_ns + _DESCRIPTOR_CTIME_OFFSET_NS,
+            },
+        )
+
+    monkeypatch.setattr(os, "fstat", fstat)
+
+
+@pytest.fixture
+def save_changed_during_read(monkeypatch: pytest.MonkeyPatch, save_path: Path) -> None:
+    actual_fstat = os.fstat
+    target: os.stat_result = save_path.stat()
+    changed: bool = False
+
+    def fstat(descriptor: int) -> os.stat_result:
+        nonlocal changed
+        result: os.stat_result = actual_fstat(descriptor)
+        if not changed and (result.st_dev, result.st_ino) == (target.st_dev, target.st_ino):
+            changed = True
+            _ = save_path.write_bytes(b"new game data written during the read")
+        return result
+
+    monkeypatch.setattr(os, "fstat", fstat)
+
+
+@pytest.fixture
+def save_path_with_other_file_identity(monkeypatch: pytest.MonkeyPatch, save_path: Path, original_bytes: bytes) -> None:
+    other: Path = save_path.with_name("other.sav")
+    _ = other.write_bytes(original_bytes)
+    other_metadata: os.stat_result = other.stat()
+    actual_stat = Path.stat
+
+    def path_stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path == save_path:
+            return other_metadata
+        return actual_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", path_stat)
+
+
+@pytest.mark.usefixtures("descriptor_with_distinct_ctime")
+def test__read_current_with_distinct_descriptor_ctime(
+    store: GamePlaybookStore,
+    original_bytes: bytes,
+) -> None:
+    # Pin the filesystem read boundary independently of save encoding.
+    contents: bytes = store._read_current()  # pyright: ignore[reportPrivateUsage]
+
+    assert contents == original_bytes
+
+
+@pytest.mark.usefixtures("save_changed_during_read")
+def test__read_current_with_change_during_read(store: GamePlaybookStore) -> None:
+    with pytest.raises(GamePlaybookChangedError):
+        # Pin the filesystem read boundary independently of save encoding.
+        _ = store._read_current()  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.usefixtures("save_path_with_other_file_identity")
+def test__read_current_with_path_descriptor_identity_mismatch(store: GamePlaybookStore) -> None:
+    with pytest.raises(GamePlaybookChangedError):
+        # Pin the filesystem read boundary independently of save encoding.
+        _ = store._read_current()  # pyright: ignore[reportPrivateUsage]
 
 
 def test_prepare_install_with_no_writes(
