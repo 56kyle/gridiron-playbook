@@ -794,6 +794,44 @@ dialog.wide {
   color: var(--muted);
   margin-top: 5px;
 }
+.saved-game-folder {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--control);
+  overflow-wrap: anywhere;
+}
+.saved-game-folder span,
+.game-folder-help label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.game-folder-help {
+  margin-top: 20px;
+  font-size: 0.85rem;
+}
+.game-folder-help summary {
+  cursor: pointer;
+}
+.game-folder-path {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.game-folder-path input {
+  min-width: 0;
+  flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+.game-folder-path button {
+  flex-shrink: 0;
+}
+.dialog-actions .forget-game-folder {
+  margin-right: auto;
+}
 .shortcuts {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -26,13 +26,11 @@ export interface GameDirectory {
   entries(): AsyncIterableIterator<[string, GameFile | GameDirectory]>;
 }
 
-interface DirectoryPickerWindow extends Window {
-  showDirectoryPicker?: (options: { id: string; mode: "readwrite" }) => Promise<GameDirectory>;
-}
-
 export type GameFileErrorCode =
   | "unsupported"
   | "cancelled"
+  | "permission"
+  | "storage"
   | "unavailable"
   | "changed"
   | "busy"
@@ -86,34 +84,8 @@ function isNotFound(error: unknown): boolean {
   return error instanceof DOMException && error.name === "NotFoundError";
 }
 
-export function supportsGameFiles(): boolean {
-  return typeof (window as DirectoryPickerWindow).showDirectoryPicker === "function" && Boolean(navigator.locks);
-}
-
-export async function selectGameDirectory(): Promise<GameDirectory> {
-  const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
-  if (!picker || !navigator.locks) {
-    throw new GameFileError(
-      "unsupported",
-      "This browser cannot install game saves directly. Download the .sav file instead."
-    );
-  }
-  try {
-    const directory = await picker.call(window, { id: "gridiron-save-games", mode: "readwrite" });
-    await readGameSave(directory);
-    return directory;
-  } catch (error) {
-    if (error instanceof GameFileError) throw error;
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new GameFileError("cancelled", "Folder selection was cancelled.");
-    }
-    throw new GameFileError(
-      "unavailable",
-      "Choose the SaveGames folder containing GridironCustomPlays.sav and allow file access.",
-      null,
-      { cause: error }
-    );
-  }
+export async function validateGameDirectory(directory: GameDirectory): Promise<void> {
+  await readGameSave(directory);
 }
 
 async function digest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {

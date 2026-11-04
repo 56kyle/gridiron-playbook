@@ -63,11 +63,18 @@ this site and browser profile. Clearing site data removes it; use **Download
 move these working copies automatically.
 
 Browsers with directory access support can use **Use in game** and **Restore
-previous**. Select the game's SaveGames directory and confirm that Gridiron is
-closed. Before replacing `GridironCustomPlays.sav`, the editor writes and verifies
+previous**. Choose SaveGames or the Gridiron installation folder once. The editor
+remembers the folder in this browser and checks access when you use it again.
+If access has expired, select **Use saved folder** to allow access again.
+**Game → Game folder…** lets you change or forget the selection.
+The first-use dialog includes Steam navigation and a copyable default Windows
+Steam folder path. This path is a hint, not a detected installation.
+
+Confirm that Gridiron is closed. Before replacing `GridironCustomPlays.sav`, the editor writes and verifies
 a separate backup in that directory. Restore also backs up what it replaces.
 Backups are retained on disk, independently of browser working copies. The site
-cannot discover Steam folders or check whether the game is running. Browsers
+cannot discover Steam folders or check whether the game is running. Remembering
+or forgetting a folder does not modify the game save. Browsers
 without directory access can still import and download saves.
 
 ## Project structure

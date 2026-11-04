@@ -1,18 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import * as engine from "./engine";
 import type { EditCommand, Formation, Play, Point, ShareKind } from "./types";
 import { Workspace } from "./workspace";
 import { openWorkspace, type WorkspaceSession } from "./storage";
-import {
-  supportsGameFiles,
-  selectGameDirectory,
-  prepareInstall,
-  prepareRestore,
-  GameFileError,
-  type GameDirectory,
-  type PreparedGameChange,
-} from "./gameFiles";
+import { prepareInstall, prepareRestore, GameFileError, type PreparedGameChange } from "./gameFiles";
+import { hasGameDirectoryAccess, readSavedGameDirectory, supportsGameFiles } from "./gameDirectory";
 import { downloadBytes, fileStem, MAX_OPEN_BYTES, message, shareBytes } from "./files";
 import DialogFrame from "./components/DialogFrame.vue";
 import PlayLibrary from "./components/PlayLibrary.vue";
@@ -21,6 +14,7 @@ import PlayInspector from "./components/PlayInspector.vue";
 import ShareDialog from "./components/ShareDialog.vue";
 import SharePreview from "./components/SharePreview.vue";
 import GameDialog from "./components/GameDialog.vue";
+import GameFolderDialog from "./components/GameFolderDialog.vue";
 
 const workspace = reactive(new Workspace());
 const formations = ref<Formation[]>([]);
@@ -55,7 +49,11 @@ const help = ref(false);
 const confirmation = ref<{ title: string; text: string; action: string; resolve: (accepted: boolean) => void } | null>(
   null
 );
-let gameDirectory: GameDirectory | undefined;
+type GameAction = { kind: "choose" } | { kind: "install"; document: string } | { kind: "restore" };
+const gameDirectory = shallowRef<FileSystemDirectoryHandle | null>(null);
+const gameFolderReady = ref(false);
+const gameFolderProblem = ref("");
+const gameFolderAction = shallowRef<GameAction | null>(null);
 const gameChange = ref<{ change: PreparedGameChange; restoring: boolean } | null>(null);
 const gameApplying = ref(false);
 const dragged = ref<{ source: string; indices: number[]; document: string } | null>(null);
@@ -353,20 +351,55 @@ async function download(): Promise<void> {
     workspace.markSaved(tab.id, document);
   });
 }
-async function prepareGame(restoring: boolean): Promise<void> {
+async function loadGameFolder(): Promise<void> {
+  try {
+    gameDirectory.value = await readSavedGameDirectory();
+  } catch {
+    gameFolderProblem.value = "The saved game folder could not be loaded. Choose it again.";
+  } finally {
+    gameFolderReady.value = true;
+  }
+}
+async function prepareGameChange(directory: FileSystemDirectoryHandle, action: GameAction): Promise<void> {
+  if (action.kind === "choose") return;
+  const change =
+    action.kind === "restore"
+      ? await prepareRestore(directory)
+      : await prepareInstall(directory, await engine.encodeSave(action.document));
+  gameChange.value = { change, restoring: action.kind === "restore" };
+}
+async function requestGame(action: GameAction): Promise<void> {
+  if (!gameFolderReady.value) return;
   await run(async () => {
-    if (!gameDirectory) gameDirectory = await selectGameDirectory();
-    const change = restoring
-      ? await prepareRestore(gameDirectory)
-      : await prepareInstall(gameDirectory, await engine.encodeSave(active.value!.document));
-    gameChange.value = { change, restoring };
+    const directory = gameDirectory.value;
+    if (!directory || action.kind === "choose") {
+      gameFolderAction.value = action;
+      return;
+    }
+    try {
+      if (!(await hasGameDirectoryAccess(directory))) {
+        gameFolderProblem.value = "Allow access to the saved folder or choose another.";
+        gameFolderAction.value = action;
+        return;
+      }
+      await prepareGameChange(directory, action);
+    } catch (cause) {
+      if (cause instanceof GameFileError && (cause.code === "unavailable" || cause.code === "permission")) {
+        gameFolderProblem.value = message(cause);
+        gameFolderAction.value = action;
+      } else throw cause;
+    }
   });
 }
-async function chooseGameFolder(): Promise<void> {
-  await run(async () => {
-    gameDirectory = await selectGameDirectory();
-    notice.value = "Game folder selected";
-  });
+async function gameFolderSelected(directory: FileSystemDirectoryHandle, remembered: boolean): Promise<void> {
+  const action = gameFolderAction.value;
+  gameDirectory.value = directory;
+  gameFolderAction.value = null;
+  gameFolderProblem.value = "";
+  if (action) await run(() => prepareGameChange(directory, action));
+  notice.value = remembered
+    ? "Game folder connected"
+    : "Game folder connected for this visit. The browser could not remember it.";
 }
 
 function keydown(event: KeyboardEvent): void {
@@ -403,6 +436,7 @@ function downloadRecovery(): void {
 onMounted(async () => {
   window.addEventListener("keydown", keydown);
   window.addEventListener("beforeunload", beforeUnload);
+  if (supportsGameFiles()) void loadGameFolder();
   try {
     formations.value = await engine.formationData();
     session = await openWorkspace();
@@ -464,9 +498,16 @@ onBeforeUnmount(() => {
           <summary title="Game playbook">Game</summary>
           <div>
             <template v-if="supportsGameFiles()"
-              ><button :disabled="busy || !active || !!active.draft" @click="prepareGame(false)">Use in game</button
-              ><button :disabled="busy" @click="prepareGame(true)">Restore previous playbook</button
-              ><button :disabled="busy" @click="chooseGameFolder">Choose game folder…</button></template
+              ><button
+                :disabled="busy || !gameFolderReady || !active || !!active.draft"
+                @click="active && requestGame({ kind: 'install', document: active.document })"
+              >
+                Use in game</button
+              ><button :disabled="busy || !gameFolderReady" @click="requestGame({ kind: 'restore' })">
+                Restore previous playbook</button
+              ><button :disabled="busy || !gameFolderReady" @click="requestGame({ kind: 'choose' })">
+                Game folder…
+              </button></template
             >
             <p v-else>
               Direct installation is unavailable in this browser. Download the .sav file, back up your existing game
@@ -673,6 +714,17 @@ onBeforeUnmount(() => {
       @close="dismissIncoming(incoming!.id)"
       @import="importIncoming"
       @download="downloadBytes(incoming!.bytes, `${fileStem(incoming!.name)}.gridironshare`)"
+    />
+    <GameFolderDialog
+      v-if="gameFolderAction"
+      :directory="gameDirectory"
+      :problem="gameFolderProblem"
+      @close="gameFolderAction = null"
+      @selected="gameFolderSelected"
+      @forgotten="
+        gameDirectory = null;
+        gameFolderProblem = '';
+      "
     />
     <GameDialog
       v-if="gameChange"

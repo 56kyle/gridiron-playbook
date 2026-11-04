@@ -45,8 +45,18 @@ separate downloads: clearing the site's browser data removes working copies.
 
 Opening a file never binds editing to that file. Use **Game → Use in game** to
 explicitly install the active book. On a browser that supports directory access,
-select the SaveGames folder and confirm that Gridiron is closed. The editor
-creates and verifies a retained backup before replacing the game save.
+choose SaveGames or the Gridiron installation folder. The first-use dialog
+provides a copyable default Windows Steam folder path. For another Steam library,
+use **Gridiron → Manage → Browse local files** in Steam.
+
+The browser remembers the selected folder across visits. If permission expires,
+**Use saved folder** requests access again. **Game → Game folder…** lets you
+change or forget the folder. Forgetting removes the remembered choice without
+deleting game saves or backups. If browser storage is unavailable, a selected
+folder still works for the current visit and the editor reports that limitation.
+
+Confirm that Gridiron is closed before applying a change. The editor creates and
+verifies a retained backup before replacing the game save.
 
 **Game → Restore previous playbook** restores the latest different backup and
 backs up the file it replaces. Filesystem backups live in the selected folder's
