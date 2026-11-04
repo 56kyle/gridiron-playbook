@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "kind": "play",
+  "plays": [
+    {
+      "formation_name": "Unknown",
+      "play_name": "Left 左 🏈",
+      "routes": [{ "slot": 250, "points": [{ "x": 0.0, "y": 0.0, "z": 0.0 }] }]
+    }
+  ]
+}

@@ -82,4 +82,4 @@ build-backend = "maturin"
 exclude = ["**/gridiron_playbook/GridironCustomPlays.json"]
 python-source = "src"
 module-name = "gridiron_playbook._native"
-manifest-path = "rust/Cargo.toml"
+manifest-path = "rust/python/Cargo.toml"

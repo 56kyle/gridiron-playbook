@@ -48,11 +48,14 @@ repos:
     hooks:
       - id: fmt
         name: Rust Format
+        args: ["--manifest-path", "rust/Cargo.toml", "--all", "--", "--check"]
+        pass_filenames: false
       - id: clippy
-        args: ["--all-features", "--", "--write"]
+        args: ["--manifest-path", "rust/Cargo.toml", "--workspace", "--all-targets", "--", "-D", "warnings"]
         name: Clippy
       - id: cargo-check
         name: Cargo Check
+        args: ["--manifest-path", "rust/Cargo.toml", "--workspace", "--all-targets"]
 
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v2.6.0

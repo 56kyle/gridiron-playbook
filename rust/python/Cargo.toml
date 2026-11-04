@@ -1,0 +1,21 @@
+[package]
+name = "gridiron-playbook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+gridiron-playbook-core.workspace = true
+pyo3 = { version = "0.22.0", features = ["extension-module", "abi3-py310"] }
+serde_json.workspace = true
+
+
+[lints.rust]
+# PyO3 0.22 expands its dependency feature inside the exception macro's caller.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("gil-refs"))'] }
