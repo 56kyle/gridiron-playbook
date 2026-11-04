@@ -12,6 +12,8 @@ from gridiron_playbook.quickshare.snapshot import ShareSnapshot
 
 
 _BAD_LINK = "Quickshare"
+_MISSING_VIEWER = r"^Set GRIDIRON_QUICKSHARE_URL to your viewer address to copy a link\.$"
+_INVALID_VIEWER_SCHEME = r"^Use an HTTP or HTTPS viewer URL without credentials\.$"
 
 
 @pytest.fixture
@@ -43,13 +45,13 @@ def test_viewer_url_from_env_with_hosted_viewer(monkeypatch: pytest.MonkeyPatch)
 
 def test_viewer_url_from_env_without_editor_or_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GRIDIRON_QUICKSHARE_URL", raising=False)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=_MISSING_VIEWER):
         _ = viewer_url_from_env()
 
 
 def test_viewer_url_from_env_with_invalid_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GRIDIRON_QUICKSHARE_URL", "ftp://invalid.example/")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=_INVALID_VIEWER_SCHEME):
         _ = viewer_url_from_env("http://127.0.0.1:8080/")
 
 
