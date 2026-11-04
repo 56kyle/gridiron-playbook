@@ -36,6 +36,10 @@ The editor keeps local working copies in its application data folder. It restore
 
 Separate browser windows have independent working copies. Reopening restores the most recently used copy. Undo and redo history starts fresh after recovery.
 
+**Use in game** installs the active playbook after confirming the game-save location. Close Gridiron before applying the change. The editor creates and verifies a backup before replacing the game save. Later edits stay in the editor until you use the action again.
+
+**Restore previous playbook** restores the most recent different backup and backs up the game save it replaces. Backups are retained in the application's data folder, separately from working copies. If automatic discovery fails, enter the path to the existing game-save file in the dialog.
+
 From the repository root, start the editor and its Quickshare viewer with one command.
 
 ```powershell

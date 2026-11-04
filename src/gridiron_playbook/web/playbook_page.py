@@ -30,6 +30,8 @@ from gridiron_playbook.playbook import playbook_to_sav
 from gridiron_playbook.point import GridironPoint
 from gridiron_playbook.quickshare.snapshot import ShareSnapshot
 from gridiron_playbook.route import GridironRoute
+from gridiron_playbook.web.game_playbook_dialog import install_game_dialog
+from gridiron_playbook.web.game_playbook_dialog import restore_game_dialog
 from gridiron_playbook.web.play_diagram import FieldTransform
 from gridiron_playbook.web.play_diagram import PlayDiagram
 from gridiron_playbook.web.play_diagram import RouteNodeActions
@@ -118,6 +120,7 @@ class _PlaybookPage:
         self.generation: int = 0
         self._file_chooser: ui.upload | None = None
         self._quickshare_dialog: ui.dialog | None = None
+        self._game_dialog: ui.dialog | None = None
 
     @property
     def editor(self) -> PlaybookEditor | None:
@@ -158,6 +161,9 @@ class _PlaybookPage:
         if self._quickshare_dialog is not None and not self._quickshare_dialog.is_deleted:
             _ = self._quickshare_dialog.close()
         self._quickshare_dialog = None
+        if self._game_dialog is not None and not self._game_dialog.is_deleted:
+            _ = self._game_dialog.close()
+        self._game_dialog = None
         _ = self.container.clear()
         with self.container:
             if self._recovery_problem:
@@ -165,12 +171,12 @@ class _PlaybookPage:
                     _ = ui.icon("warning").classes("text-warning")
                     _ = ui.label(self._recovery_problem)
                     _ = ui.button("Retry saving", on_click=self.render).props("flat no-caps")
-            with ui.element("header").classes("pb-header"):
+            with ui.element("header").classes("pb-header").style("flex-wrap:wrap"):
                 with ui.row().classes("pb-brand"):
                     _ = ui.icon("sports_football").classes("pb-brand-icon")
                     _ = ui.label("Gridiron").classes("pb-brand-name")
-                if self.editor is not None:
-                    with ui.row().classes("pb-actions").style("flex-wrap:wrap;max-width:100%"):
+                with ui.row().classes("pb-actions").style("flex-wrap:wrap;max-width:100%"):
+                    if self.editor is not None:
                         _ = ui.button("Open playbook", icon="folder_open", on_click=self._open_dialog).props(
                             "flat no-caps"
                         )
@@ -186,9 +192,19 @@ class _PlaybookPage:
                             .props("flat no-caps")
                             .set_enabled(bool(self.editor.plays) and self.draft_slot is None)
                         )
-                        _ = ui.button("Download .sav", icon="download", on_click=self._download).props(
-                            "unelevated no-caps"
+                        _ = ui.button("Download .sav", icon="download", on_click=self._download).props("flat no-caps")
+                        _ = (
+                            ui.button("Use in game", icon="sports_football", on_click=self._use_in_game)
+                            .props("unelevated no-caps")
+                            .set_enabled(self.draft_slot is None)
+                            .mark("use-in-game")
                         )
+                    _ = (
+                        ui.button("Restore previous", icon="history", on_click=self._restore_game)
+                        .props('flat no-caps aria-label="Restore previous playbook"')
+                        .tooltip("Restore previous playbook")
+                        .mark("restore-game-playbook")
+                    )
             if self.books.tabs:
                 self._tabs()
             if self.editor is None:
@@ -516,6 +532,32 @@ class _PlaybookPage:
         generation = self.generation
         if await self._download_tab(active.id) and self.generation == generation:
             self.render()
+
+    def _use_in_game(self) -> None:
+        editor = self.editor
+        if editor is None or not self._can_leave_draft():
+            return
+        generation: int = self.generation
+        revision: int = editor.revision
+
+        def is_current() -> bool:
+            return self.generation == generation and self.editor is editor and editor.revision == revision
+
+        self._show_game_dialog(partial(install_game_dialog, editor.playbook, self.filename, is_current))
+
+    def _restore_game(self) -> None:
+        generation: int = self.generation
+        self._show_game_dialog(partial(restore_game_dialog, lambda: self.generation == generation))
+
+    def _show_game_dialog(self, create: Callable[[], ui.dialog]) -> None:
+        active = self._game_dialog
+        if active is not None and not active.is_deleted and active.value:
+            return
+        try:
+            with self.container:
+                self._game_dialog = create()
+        except (OSError, ValueError) as error:
+            ui.notify(f"Could not open game playbook controls. {str(error)[:250]}", type="negative")
 
     async def _download_tab(self, tab_id: str) -> bool:
         tab = self.books.get_tab(tab_id)
