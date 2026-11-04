@@ -1,66 +1,84 @@
 # Quickshare
 
-Quickshare carries the plays inside a link or a `.gridironshare` file. The viewer opens either format in the recipient's browser. Hosting the viewer requires only static files. The part of the URL after `#v1/` stays in the browser when it requests the page. Anyone with the complete link or file can read and forward the plays.
+Quickshare carries plays inside a link or a `.gridironshare` file. The static
+editor previews and imports either format in the recipient's browser. No play
+storage service is used. The payload after `#v1/` is not sent when the browser
+requests the page. Anyone with the complete link or file can read and forward it.
 
 ## Share and import
 
-Open a playbook in the editor and choose **Share play** or **Share playbook**. Select a precision for the link and file. The character count includes the entire URL, including your viewer address.
+Choose **Share play** or **Share playbook** and select a precision. The displayed
+character count includes the entire URL, including the site's address.
 
-| Precision | Effect on coordinates |
-| --- | --- |
-| Exact (default) | Preserves the original coordinates. |
-| 1 mm | Rounds to the nearest millimeter. |
-| 1 cm | Rounds to the nearest centimeter. |
+| Precision | Effect on coordinates                                      |
+| --------- | ---------------------------------------------------------- |
+| Exact     | Preserves the original coordinates, including signed zero. |
+| 1 mm      | Rounds eligible coordinates to the nearest millimeter.     |
+| 1 cm      | Rounds eligible coordinates to the nearest centimeter.     |
 
-Quickshare can represent a standard block with its anchor waypoint and facing. The viewer and editor expand the instruction back into the 28 game waypoints. Exact mode uses this shortcut only when it reproduces every coordinate bit for bit. With 1 mm or 1 cm precision, a standard block follows the rounded anchor and uses a two-byte heading. Hand-edited strokes remain individual waypoints.
+A standard block can be represented by its anchor and facing instead of its 28
+waypoints. Exact mode uses that shortcut only when reconstruction preserves every
+coordinate bit. Reduced precision uses rounded anchors and compact headings.
+Hand-edited block strokes retain their original coordinates.
 
-**Download share file** uses the selected precision. When a compact precision is selected, **Download exact file** saves the original coordinates. You can download and import files even without a configured viewer address.
+**Download share file** uses the selected precision. **Download exact file**
+keeps the original coordinates. Both files can be opened in the editor.
 
-**Copy link** copies links of up to 2,000 characters directly. At 2,001–4,000 characters, confirm the warning that the link exceeds the standard Discord message limit. Above 4,000, confirm the stronger warning that the link also exceeds the Nitro limit. For long playbooks, send the share file as an attachment. These counts apply to the link alone.
+Links up to 2,000 characters copy directly. Longer links require confirmation:
+2,001–4,000 characters exceed Discord's standard message limit, and more than
+4,000 exceed its Nitro message limit. Copying remains available after the warning.
+The counts apply to the link alone. For large books, send the share file.
 
-Recipients can open a link in a browser or choose a local share file on the viewer page. In the editor, **Import share** adds an individual play to the top of the active book. A whole shared playbook opens in a new tab, using the active book's Unreal save metadata. Opening another `.sav` or `.json` file also creates a tab.
+An incoming link opens a preview before changing the workspace. Importing an
+individual play adds it to the top of the active book. Importing a whole playbook
+opens another tab. Without an active book, the editor uses its blank save
+template. Imported books retain the destination template's Unreal save metadata.
 
-Select plays to copy or move them between tabs. **Merge into** copies every play from one book into another in source order. The destination keeps its own save metadata. **Download .sav** downloads the active tab.
+New and duplicated plays also appear at the top. Select plays to reorder, copy,
+or move them between tabs. **Merge** copies every source play into the selected
+destination in source order. Transfers participate in the shared undo history.
 
-**Undo** and **Redo** follow the order of edits across all tabs. Moving plays is one action that restores both books together. Undo can reopen a closed tab needed to restore an edit. Switching tabs and opening files do not add undo steps.
+## Run and host
 
-The viewer's **Download share file** button saves the received precision. For original coordinates, the sender can use **Download exact file** in their editor.
-
-### Existing shares
-
-The updated editor and viewer open both the original binary format and the newer block-compressed format. Both use the same `#v1/` URL fragment and `.gridironshare` extension. When updating a hosted viewer, export the new assets and deploy them together at its existing address so old links keep working.
-
-## Run locally
-
-The editor keeps local working copies in its application data folder. It restores open tabs, their edits, and the active tab when you refresh or reopen it in the same browser. Uploaded save files stay untouched. Use **Download .sav** to export the active working copy.
-
-Separate browser windows have independent working copies. Reopening restores the most recently used copy. Undo and redo history starts fresh after recovery.
-
-**Use in game** installs the active playbook after confirming the game-save location. Close Gridiron before applying the change. The editor creates and verifies a backup before replacing the game save. Later edits stay in the editor until you use the action again.
-
-**Restore previous playbook** restores the most recent different backup and backs up the game save it replaces. Backups are retained in the application's data folder, separately from working copies. If automatic discovery fails, enter the path to the existing game-save file in the dialog.
-
-From the repository root, start the editor and its Quickshare viewer with one command.
+After the one-time tool setup in the [repository guide](../../../README.md), run:
 
 ```powershell
-uv run --extra web python -m gridiron_playbook.web
+npm run dev
 ```
 
-Open the [editor](http://127.0.0.1:8080/) to create or edit plays. Copied links open in the [local viewer](http://127.0.0.1:8080/quickshare/). To share with someone on another computer, send a `.gridironshare` file or configure a public viewer as described below.
+The editor and Quickshare preview are the same browser application. No environment
+variable, Python server, or second terminal is required. Links use the current
+site's address; localhost links work only on the same computer.
 
-## Host the viewer
+To host the entire editor and viewer:
 
-1. Export the viewer into a new or empty directory.
+```powershell
+npm run build
+```
 
-   ```powershell
-   uv run --extra web python -m gridiron_playbook.quickshare --export ./quickshare-site
-   ```
+Publish the `dist` directory to an HTTPS static host or use the manual **Deploy
+editor to Pages** GitHub Actions workflow. Preserve the hosted address and deploy
+all assets together so existing links continue to open. Working copies remain
+in each visitor's browser; hosting does not store their plays.
 
-2. Upload the exported files together to an HTTPS static site. Preserve their names and directory structure.
-3. Set `GRIDIRON_QUICKSHARE_URL` in the editor's environment to the viewer page, for example `https://share.example.org/playbook/`. Restart the editor.
+The Python library also retains a standalone read-only viewer exporter:
 
-The host serves the same assets to each visitor. Importing a link in the editor decodes the payload locally. Keep the viewer address and versioned decoder available for existing self-contained links.
+```powershell
+uv run python -m gridiron_playbook.quickshare --export ./quickshare-site
+```
 
-## Limits
+This exports static files to a new or empty directory. It is a library utility;
+the primary application and its viewer are built with `npm run build`.
 
-The snapshot format supports up to 2,000 plays and 200,000 total waypoints, with up to 256 routes and 16,384 waypoints per play. Encoded size limits also apply. The recipient's combined playbook must fit the editor's 64 MiB `.sav` limit. The editor checks that limit before changing the destination.
+## Format compatibility and limits
+
+Both binary versions 1 and 2 remain readable. New links and files use version 2
+with block compression. Both versions use `#v1/` in URLs and `.gridironshare` for
+files. Exact mode preserves values supplied to the encoder; it cannot recover
+precision already removed by a sender.
+
+The format allows up to 2,000 plays, 256 routes per play, 16,384 waypoints per
+play, and 200,000 waypoints in total after block expansion. Compressed and
+inflated payloads are each limited to 16 MiB. Save imports and exports have a
+64 MiB limit. These are format limits, not a guarantee that a large book fits in
+a chat message or that every game version accepts that many plays.

@@ -1,55 +1,85 @@
 # Usage
 
-## Local playbook editor
+## Browser editor
 
-From the repository root, run:
+After the one-time setup in the [repository guide](../README.md), run from the
+repository root:
 
 ```console
-uv run --extra web python -m gridiron_playbook.web
+npm run dev
 ```
 
-Open the loopback URL printed in the terminal (normally `http://127.0.0.1:8080`).
-Choose a custom-play `.sav` or its uesave `.json` export. Each tab holds its own
-copy in memory. Download your changes before closing or refreshing the page.
+Open the address printed by Vite. The editor and Quickshare preview run in the
+browser; no Python server or separate viewer process is required.
 
-1. Search the play library or filter by formation. Use **Duplicate** to try a variation or
-   **New play** to add an empty play to the open document.
-2. Select a route on the field or in the lineup. Drag a handle to move a waypoint.
-   A drag preserves its game-space height and counts as one edit.
-3. Select an unused player on the field or in the lineup to draw their route.
-   Alternatively, choose **Draw route**, choose a position or **Custom slot**,
-   and start drawing. Click the field to add waypoints. A verified starting
-   position needs only one waypoint; a route without a known start needs two.
-   Choose **Finish route** to keep the route or **Cancel** to discard it.
-   New waypoints have a height of zero.
-4. Use **Undo** and **Redo** to step through completed edits.
-5. Choose **Download .sav** to save the edited copy. Use **Open playbook** to
-   reopen it. Downloading uses the browser's download location.
+Choose **Open files** for `.sav`, `.json`, or `.gridironshare` files, or start with
+**New playbook**. Full playbooks open in separate tabs. New, duplicated, and
+imported individual plays appear at the top of the active playbook.
 
-The field fits the selected play. For the ten [documented formations](reference.md#offensive-formations-and-slots),
-player markers show the game's starting positions. Routes connect those markers
-to the saved waypoints. Starting positions are display references and are never
-added to the downloaded save.
+1. Select a play to edit its name, formation, and routes. Use Ctrl/Command-click
+   or Shift-click to select several plays.
+2. Drag plays within the list to reorder them or onto another tab to move them.
+   Hold Ctrl/Command to copy. Copy, move, and merge controls provide the same
+   operations without dragging.
+3. Click a player to start drawing, or choose a position and **Draw route**.
+   Click to add points; the preview follows the pointer. Enter finishes the
+   route, Escape cancels it, and Backspace removes the last point.
+4. Select a route to move its nodes. Use **N** to insert a node, **Delete** to
+   remove the selected node, and **B** to add a block at that node. Displayed
+   yardage excludes the strokes used to draw a standard block.
+5. Ctrl/Command-Z undoes a completed edit; Ctrl/Command-Shift-Z redoes it.
+   Transfers between books are one undo operation.
+6. **Download .sav** exports the active book. **Share play** and **Share
+   playbook** provide self-contained links and files with selectable precision.
 
-### Verify a browser drag
+The field fits the selected play. The ten [documented formations](reference.md#offensive-formations-and-slots)
+provide player starting positions. These starting markers are display references;
+the editor does not add them as saved waypoints.
 
-The optional browser integration test opens the checked-in fixture, moves a
-route point, and checks the downloaded save. To run it on Windows with Edge,
-start the editor in one terminal:
+## Recovery and game installation
 
-```powershell
-uv run --extra web --group browser-tests python -m gridiron_playbook.web
+The browser saves tabs, unsaved edits, and unfinished drawings as working copies.
+Refresh restores the current window. New windows get independent copies of the
+most recently used workspace. Undo history starts fresh after recovery. Keep
+separate downloads: clearing the site's browser data removes working copies.
+
+Opening a file never binds editing to that file. Use **Game → Use in game** to
+explicitly install the active book. On a browser that supports directory access,
+select the SaveGames folder and confirm that Gridiron is closed. The editor
+creates and verifies a retained backup before replacing the game save.
+
+**Game → Restore previous playbook** restores the latest different backup and
+backs up the file it replaces. Filesystem backups live in the selected folder's
+`GridironPlaybookBackups` directory, independently of browser working copies.
+Without directory access support, import and download still work.
+
+## Build and test the static site
+
+```console
+npm run build
+npm run preview
 ```
 
-In a second terminal, run:
+Publish the `dist` directory to GitHub Pages or another HTTPS static host. The
+repository includes a manual Pages deployment workflow. Quickshare uses the
+current site's address and does not need an environment variable.
 
-```powershell
-$env:PLAYBOOK_EDITOR_TEST_URL = "http://127.0.0.1:8080"
-$env:PLAYBOOK_EDITOR_BROWSER_CHANNEL = "msedge"
-uv run --extra web --group browser-tests pytest tests/integration_tests/test_browser_diagram.py
+To test the built browser application and its Wasm bindings:
+
+```console
+npm run build:test
+npm test
+npm run test:browser
 ```
 
-## Validate custom plays
+The browser suite starts and stops its own static server. It uses Edge on Windows
+and Playwright Chromium elsewhere. It checks a GitHub Pages-style project path
+and uses isolated working copies and filesystem fixtures.
+
+## Python library
+
+The Python package remains available for scripts. Maturin builds its native
+bindings from the same Rust core used by the browser.
 
 ```python
 from pathlib import Path
@@ -65,10 +95,11 @@ print(play.formation_name, play.play_name)
 exported_json = playbook.model_dump_json(by_alias=True, exclude_unset=True, indent=2)
 ```
 
-The models preserve the save header, schema registry, play data, and trailing bytes.
-Use `by_alias=True` to retain exported keys such as `CustomPlays_0` and `X_0`.
-Use `exclude_unset=True` to preserve omitted fields in the last drawn play.
-Unknown fields raise a Pydantic `ValidationError`.
+The Python models preserve the save header, schema registry, play data, and
+trailing bytes. Use `by_alias=True` for exported keys such as `CustomPlays_0` and
+`X_0`. Use `exclude_unset=True` to preserve omitted fields in the last drawn play.
+Unknown fields raise a Pydantic `ValidationError`. The browser's Rust document
+commands instead retain unrelated raw metadata without rebuilding it in JavaScript.
 
 ## Command line
 

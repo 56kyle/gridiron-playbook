@@ -94,7 +94,7 @@ def format_rust(session: Session) -> None:
     session.log("Ensuring rustfmt component is available...")
     session.run("rustup", "component", "add", "rustfmt", external=True)
     session.log("Formatting Rust code...")
-    session.run("cargo", "fmt", "--all", external=True)
+    session.run("cargo", "fmt", "--manifest-path", CRATES_FOLDER / "Cargo.toml", "--all", external=True)
 
 
 @nox.session(python=False, name="lint-python", tags=[LINT, QUALITY])
@@ -110,14 +110,26 @@ def lint_rust(session: Session) -> None:
     session.log("Ensuring clippy component is available...")
     session.run("rustup", "component", "add", "clippy", external=True)
     session.log("Running clippy lints...")
-    session.run("cargo", "clippy", "--all-features", "--", "-D", "warnings", external=True)
+    session.run(
+        "cargo",
+        "clippy",
+        "--manifest-path",
+        CRATES_FOLDER / "Cargo.toml",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings",
+        external=True,
+    )
 
 
 @nox.session(python=PYTHON_VERSIONS, name="typecheck")
 def typecheck(session: Session) -> None:
     """Run static type checking (Basedpyright) on Python code."""
     session.log("Installing type checking dependencies...")
-    session.install(".[web]", "--group", "dev", "--group", "browser-tests")
+    session.install(".", "--group", "dev")
     python_path: Path = Path(shutil.which("python", path=session.bin))
 
     session.log(f"Running Basedpyright check with py{session.python}.")
@@ -139,14 +151,14 @@ def security_rust(session: Session) -> None:
     """Run code security checks (cargo audit)."""
     session.log("Ensuring cargo-audit is available...")
     session.run("cargo", "install", "cargo-audit", "--locked", external=True)
-    session.run("cargo", "audit", "--all", external=True)
+    session.run("cargo", "audit", "--file", CRATES_FOLDER / "Cargo.lock", external=True)
 
 
 @nox.session(python=PYTHON_VERSIONS, name="tests-python", tags=[TEST])
 def tests_python(session: Session) -> None:
     """Run the Python test suite (pytest with coverage)."""
     session.log("Installing test dependencies...")
-    session.install(".[web]", "--group", "dev")
+    session.install(".", "--group", "dev")
 
     session.log(f"Running test suite with py{session.python}.")
     test_results_dir = TESTS_FOLDER / "results"
@@ -167,10 +179,16 @@ def tests_python(session: Session) -> None:
 @nox.session(python=False, name="tests-rust", tags=[TEST])
 def tests_rust(session: Session) -> None:
     """Test the project's rust crates."""
-    crates: list[Path] = [cargo_toml.parent for cargo_toml in CRATES_FOLDER.glob("*/Cargo.toml")]
-    crate_kwargs: list[str] = [f"-p {crate.name}" for crate in crates]
-    session.run("cargo", "test", "--all-features", "--no-run", *crate_kwargs, external=True)
-    session.run("cargo", "test", "--all-features", *crate_kwargs, external=True)
+    session.run(
+        "cargo",
+        "test",
+        "--manifest-path",
+        CRATES_FOLDER / "Cargo.toml",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        external=True,
+    )
 
 
 @nox.session(python=DEFAULT_PYTHON_VERSION, name="build-docs", tags=[DOCS, BUILD])
@@ -219,7 +237,7 @@ def build_python(session: Session) -> None:
 def build_rust(session: Session) -> None:
     """Build standalone Rust crates for potential independent publishing."""
     session.log("Building Rust crates...")
-    session.run("cargo", "build", "--release", "--manifest-path", "rust/Cargo.toml", external=True)
+    session.run("cargo", "build", "--release", "--manifest-path", CRATES_FOLDER / "Cargo.toml", external=True)
 
 
 @nox.session(python=False, name="build-container", tags=[BUILD])
@@ -298,8 +316,7 @@ def publish_rust(session: Session) -> None:
     """Publish built crates to crates.io."""
     session.log("Publishing crates to crates.io")
     for cargo_toml in CRATES_FOLDER.glob("*/Cargo.toml"):
-        crate_folder: Path = cargo_toml.parent
-        session.run("cargo", "publish", "-p", crate_folder.name)
+        session.run("cargo", "publish", "--manifest-path", cargo_toml, external=True)
 
 
 @nox.session(python=False)

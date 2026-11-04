@@ -1,95 +1,107 @@
-# gridiron-playbook
+# Gridiron Playbook
 
-gridiron_playbook
+Create, edit, and share Gridiron plays in your browser. The editor is a static
+Vue/TypeScript application. Rust runs locally in WebAssembly to read and write
+Unreal saves, apply edits, and encode Quickshare links. No Python server or play
+storage service is required.
 
----
+## Run locally
 
-**[📚 View Documentation](https://gridiron-playbook.readthedocs.io/)** | **[🐛 Report a Bug](https://github.com/56kyle/gridiron-playbook/issues)** | **[✨ Request a Feature](https://github.com/56kyle/gridiron-playbook/issues)**
+Install Node.js 22.12 or later and a current stable Rust toolchain. On Windows,
+Rust also requires the Visual Studio C++ build tools.
 
----
+Run these setup commands once from the repository root:
 
-## Installation
-
-You can install `gridiron_playbook` via [pip](pip-documentation) from PyPI:
-
-```bash
-pip install gridiron_playbook
+```powershell
+npm ci
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.130 --locked --root .tools
 ```
 
-### Installation for Development
+Then start the complete editor and Quickshare viewer with one command:
 
-To set up `gridiron_playbook` for local development:
-
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/56kyle/gridiron-playbook.git
-    cd gridiron-playbook
-    ```
-2.  Install dependencies using [:term:`uv`](uv-documentation):
-    ```bash
-    uv sync
-    ```
-3.  Install pre-commit hooks:
-    ```bash
-    uvx nox -s pre-commit -- install
-    ```
-
-This sets up a virtual environment and installs core, development, and quality check dependencies.
-
-## Usage
-
-(This section should explain how to use the generated application. Replace the content below with instructions specific to your project's functionality. If your project is a library, show import examples. If it's a CLI application, show command examples. Link to the full documentation for details.)
-
-### As a Library
-
-```python
-# Example usage of your package as a library
-# from gridiron_playbook import some_function
-# result = some_function()
-# print(result)
+```powershell
+npm run dev
 ```
 
-### As a Command-Line Application
+Open the address printed by Vite. The command rebuilds the Rust browser module
+before starting. After opening the site, editing and file conversion run on your
+computer. Files are not uploaded to a playbook service.
 
-If your project defines command-line entry points in `pyproject.toml`:
+## Build and host
 
-```bash
-# Example usage of your CLI application
-# gridiron-playbook --help
-# gridiron-playbook do-something --input file.txt
+```powershell
+npm run build
+npm run preview
 ```
 
-For detailed API documentation and CLI command references, see the **[Documentation][documentation]**.
+The `dist` directory contains the complete site, including its Wasm module.
+Upload those files together to an HTTPS static host. Relative asset URLs support
+both a domain root and a GitHub Pages project path such as
+`https://56kyle.github.io/gridiron-playbook/`. The app uses URL fragments for
+Quickshare and does not require server route rewrites.
 
-## Development Workflow
+For GitHub Pages, select **GitHub Actions** in the repository's **Settings →
+Pages**, then run the **Deploy editor to Pages** workflow. Deployment is manual;
+local development and commits do not publish the site. The workflow builds a
+production artifact without the browser test harness.
 
-This project uses a robust set of tools for development, testing, and quality assurance. All significant automated tasks are run via [:term:`Nox`](nox-documentation), orchestrated by the central `noxfile.py`.
+Quickshare links use the current site's address. Share files also work without
+a public host. See the [Quickshare guide](src/gridiron_playbook/quickshare/README.md)
+for precision options, size limits, and compatibility.
 
-- **Run all checks (lint, typecheck, security):** `uvx nox -s check`
-- **Run test suite with coverage:** `uvx nox -s test`
-- **Build documentation:** `uvx nox -s docs`
-- **Build package:** `uvx nox -s build`
-- **See all available tasks:** `uvx nox -l`
+## Working copies and game saves
 
-Explore the `noxfile.py` and the project documentation for detailed information on the automated workflow.
+Opening a file creates an editor working copy. Tabs, unsaved changes, selections,
+and unfinished routes are stored in this browser's IndexedDB database. Refresh
+restores the current window; a new window gets an independent copy of the most
+recent workspace. Undo history starts fresh after recovery.
 
-## Contributing
+Working copies do not write to the file you opened. Browser storage belongs to
+this site and browser profile. Clearing site data removes it; use **Download
+.sav** to keep a separate file. Moving to a different hostname or port does not
+move these working copies automatically.
 
-(This section should guide contributions _to this specific generated project_, not the template. It should refer to the project's `CODE_OF_CONDUCT.md` and link to a `CONTRIBUTING.md` specific to the project, if you choose to generate one.)
+Browsers with directory access support can use **Use in game** and **Restore
+previous**. Select the game's SaveGames directory and confirm that Gridiron is
+closed. Before replacing `GridironCustomPlays.sav`, the editor writes and verifies
+a separate backup in that directory. Restore also backs up what it replaces.
+Backups are retained on disk, independently of browser working copies. The site
+cannot discover Steam folders or check whether the game is running. Browsers
+without directory access can still import and download saves.
 
-Report bugs or suggest features via the [issue tracker](https://github.com/56kyle/gridiron-playbook/issues).
+## Project structure
 
-See [CONTRIBUTING.md](#) for contribution guidelines.
+- `web/src`: Vue interface, browser working copies, file access, and Wasm worker.
+- `rust/core`: Shared save, edit, formation, route, block, and Quickshare logic.
+- `rust/wasm`: Browser bindings to the core.
+- `rust/python`: PyO3 bindings for the Python library.
+- `src/gridiron_playbook`: Python library and standalone Quickshare exporter.
+- `web/tests`: TypeScript unit tests and Playwright browser tests.
+- `tests`: Python library and Python/Rust integration tests.
 
-## License
+Complete save documents remain opaque strings in the browser. Edit commands run
+in Rust, retaining unrelated Unreal metadata and Exact-mode coordinate bits.
+The Wasm module runs in a worker, so file processing does not block pointer
+interaction and a parser trap can be recovered without losing the workspace.
 
-Distributed under the terms of the **MIT** license. See [LICENSE](LICENSE) for details.
+## Verify
 
----
+```powershell
+npm run build:test
+npm test
+npm run test:browser
+cargo test --manifest-path rust/Cargo.toml -p gridiron-playbook-core
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+uv sync --group dev
+uv run pytest tests
+```
 
-**This project was generated from the [cookiecutter-robust-python template][cookiecutter-robust-python].**
+Browser tests use installed Microsoft Edge on Windows. Elsewhere, install the
+Playwright browser with `npx playwright install --with-deps chromium`. The tests
+serve the built site under `/gridiron-playbook/` and use isolated browser storage
+and temporary files. They never access an actual game save.
 
-<!-- Reference Links -->
-
-[cookiecutter-robust-python]: https://github.com/robust-python/cookiecutter-robust-python
-[documentation]: https://gridiron-playbook.readthedocs.io/
+Build the Python extension with `uv sync --group dev` or `uv pip install -e .`.
+Maturin compiles the same core for native Python; Python is not required to build
+or use the browser editor.

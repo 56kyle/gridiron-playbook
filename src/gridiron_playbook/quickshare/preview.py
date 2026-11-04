@@ -22,9 +22,8 @@ def export_viewer(destination: Path) -> None:
     if any(destination.iterdir()):
         raise FileExistsError(f"Choose an empty viewer directory: {destination}")
     source: Path = Path(__file__).parent
-    for name in ("index.html", "viewer.css", "viewer.js", "decode.js"):
+    for name in ("index.html", "viewer.css", "viewer.js", "decode.js", "editor.css"):
         _ = copyfile(source / name, destination / name)
-    _ = copyfile(source.parent / "web" / "editor.css", destination / "editor.css")
     formations: dict[str, dict[int, tuple[str, float, float]]] = {
         name: {slot: (position_label(name, slot), *xy) for slot, xy in formation_starts(name).items()}
         for name in FORMATION_NAMES

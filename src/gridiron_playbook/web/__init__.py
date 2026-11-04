@@ -1,1 +1,0 @@
-"""Browser-based playbook editor."""

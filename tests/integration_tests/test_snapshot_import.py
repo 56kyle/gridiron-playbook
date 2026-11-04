@@ -1,8 +1,8 @@
-from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
 
+from gridiron_playbook import _native
 from gridiron_playbook.block import ends_with_block
 from gridiron_playbook.editor import PlaybookEditor
 from gridiron_playbook.play import GridironPlay
@@ -67,12 +67,9 @@ def test_import_plays_with_empty_collection(original: GridironPlaybook) -> None:
     assert editor.revision == 0
 
 
-@pytest.mark.skipif(find_spec("nicegui") is None, reason="The upload decoder uses the web extra.")
-def test_decode_uploaded_playbook_with_dense_import(original: GridironPlaybook) -> None:
-    from gridiron_playbook.web.playbook_files import decode_uploaded_playbook
-
-    node = GridironPoint(X_0=250, Y_0=125, Z_0=0)
-    route = GridironRoute(Slot_0=5, Points_0=(node,) * 1000)
+def test_decode_save_with_dense_import(original: GridironPlaybook) -> None:
+    points: tuple[GridironPoint, ...] = tuple(GridironPoint(X_0=index * 2.5, Y_0=125, Z_0=0) for index in range(1000))
+    route = GridironRoute(Slot_0=5, Points_0=points)
     play = GridironPlay(FormationName_0="Twins Right", PlayName_0="Dense", Routes_0=(route,))
     incoming = ShareSnapshot(version=1, kind="playbook", plays=(play,) * 125)
     editor = PlaybookEditor(original)
@@ -80,31 +77,5 @@ def test_decode_uploaded_playbook_with_dense_import(original: GridironPlaybook) 
     data = playbook_to_sav(editor.playbook)
     assert len(data) > 16 * 1024 * 1024
 
-    reopened = decode_uploaded_playbook("Imported.sav", data)
+    reopened = GridironPlaybook.model_validate_json(_native.decode_save(data))
     assert reopened.root.properties.custom_plays == (*incoming.plays, *original.root.properties.custom_plays)
-
-
-def test_validate_import_size_with_combined_oversized_save(
-    original: GridironPlaybook, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from gridiron_playbook.web import playbook_files
-
-    editor = PlaybookEditor(original)
-    room: int = len(playbook_to_sav(original))
-    monkeypatch.setattr(playbook_files, "MAX_SAVE_BYTES", room)
-    single = ShareSnapshot(version=1, kind="play", plays=editor.plays[:1])
-
-    with pytest.raises(playbook_files.PlaybookFileError):
-        playbook_files.validate_import_size(editor.playbook, single)
-    assert editor.playbook is original
-    assert editor.revision == 0
-
-
-def test_validate_import_size_with_whole_book_in_new_tab(
-    original: GridironPlaybook, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from gridiron_playbook.web import playbook_files
-
-    monkeypatch.setattr(playbook_files, "MAX_SAVE_BYTES", len(playbook_to_sav(original)))
-    snapshot = ShareSnapshot(version=1, kind="playbook", plays=original.root.properties.custom_plays)
-    playbook_files.validate_import_size(original, snapshot)

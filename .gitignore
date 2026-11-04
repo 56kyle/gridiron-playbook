@@ -72,6 +72,10 @@ nohup.out
 
 # Prettier dependencies
 node_modules/
+.tools/
+web/src/wasm/
+playwright-report/
+test-results/
 
 # Release Notes
 body.md
