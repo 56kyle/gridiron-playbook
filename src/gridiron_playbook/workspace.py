@@ -3,7 +3,14 @@
 from collections import deque
 from dataclasses import dataclass
 from dataclasses import field
+from typing import ClassVar
 from uuid import uuid4
+
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
+from pydantic import model_validator
+from typing_extensions import Self
 
 from gridiron_playbook.editor import PlaybookEditor
 from gridiron_playbook.play import GridironPlay
@@ -17,6 +24,38 @@ DEFAULT_MAX_SAVE_BYTES = 64 * 1024 * 1024
 
 class PlaybookCapacityError(ValueError):
     """A resulting playbook cannot fit the editor's save-file limit."""
+
+
+class TabSnapshot(BaseModel):
+    """An open tab's working document and its last download baseline."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    id: str = Field(min_length=1)
+    filename: str
+    document: GridironPlaybook
+    saved_document: GridironPlaybook
+
+
+class WorkspaceSnapshot(BaseModel):
+    """Ordered open tabs and active identity, excluding transient undo history."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    tabs: tuple[TabSnapshot, ...]
+    active_id: str | None
+
+    @model_validator(mode="after")
+    def _validate_tab_identity(self) -> Self:
+        identifiers: set[str] = {tab.id for tab in self.tabs}
+        if len(identifiers) != len(self.tabs):
+            raise ValueError("Open playbook tabs must have distinct identifiers.")
+        if self.tabs:
+            if self.active_id not in identifiers:
+                raise ValueError("The active playbook must identify an open tab.")
+        elif self.active_id is not None:
+            raise ValueError("An empty workspace cannot have an active playbook.")
+        return self
 
 
 @dataclass
@@ -81,6 +120,34 @@ class PlaybookWorkspace:
         self._baseline: dict[str, GridironPlaybook] = {}
         self._undo: deque[tuple[_DocumentChange, ...]] = deque(maxlen=_HISTORY_LIMIT)
         self._redo: list[tuple[_DocumentChange, ...]] = []
+
+    def snapshot(self) -> WorkspaceSnapshot:
+        """Capture open working documents and download baselines without changing history."""
+        return WorkspaceSnapshot(
+            tabs=tuple(
+                TabSnapshot(
+                    id=tab.id,
+                    filename=tab.filename,
+                    document=tab.editor.playbook,
+                    saved_document=tab.saved_document,
+                )
+                for tab in self.tabs
+            ),
+            active_id=self._active_id,
+        )
+
+    @classmethod
+    def from_snapshot(cls, snapshot: WorkspaceSnapshot, *, max_save_bytes: int = DEFAULT_MAX_SAVE_BYTES) -> Self:
+        """Restore open tabs and dirty state with a fresh undo and redo history."""
+        workspace: Self = cls(max_save_bytes=max_save_bytes)
+        for saved_tab in snapshot.tabs:
+            tab = PlaybookTab(id=saved_tab.id, filename=saved_tab.filename, editor=PlaybookEditor(saved_tab.document))
+            tab.saved_document = saved_tab.saved_document
+            workspace._tabs[tab.id] = tab
+            workspace._open.append(tab.id)
+            workspace._baseline[tab.id] = saved_tab.document
+        workspace._active_id = snapshot.active_id
+        return workspace
 
     @property
     def tabs(self) -> tuple[PlaybookTab, ...]:
