@@ -5,6 +5,7 @@ const repository = fileURLToPath(new URL("../", import.meta.url));
 
 export default defineConfig({
   testDir: "./tests/browser",
+  forbidOnly: Boolean(process.env.CI),
   timeout: 60_000,
   expect: { timeout: 12_000 },
   fullyParallel: false,

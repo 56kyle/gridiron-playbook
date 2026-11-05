@@ -71,8 +71,18 @@ npm run preview
 ```
 
 Publish the `dist` directory to GitHub Pages or another HTTPS static host. The
-repository includes a manual Pages deployment workflow. Quickshare uses the
-current site's address and does not need an environment variable.
+**Deploy editor to Pages** workflow builds, tests, and deploys pushes to `develop`.
+Pull requests to `develop` run the same checks without deploying. To redeploy,
+open the workflow in GitHub Actions, choose **Run workflow**, and select `develop`.
+Manual runs on other branches only build and test.
+The workflow opens the production build in a browser before publishing it. Failed
+browser checks retain traces and screenshots in the run's
+`browser-failure-diagnostics` artifact for seven days.
+
+In a new repository or fork, set **Settings → Pages → Source** to **GitHub Actions**.
+If the `github-pages` environment restricts branches, allow `develop` to deploy.
+The published site is `https://56kyle.github.io/gridiron-playbook/`. Quickshare uses
+the current site's address and does not need an environment variable.
 
 To test the built browser application and its Wasm bindings:
 

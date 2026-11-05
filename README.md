@@ -41,10 +41,17 @@ both a domain root and a GitHub Pages project path such as
 `https://56kyle.github.io/gridiron-playbook/`. The app uses URL fragments for
 Quickshare and does not require server route rewrites.
 
-For GitHub Pages, select **GitHub Actions** in the repository's **Settings →
-Pages**, then run the **Deploy editor to Pages** workflow. Deployment is manual;
-local development and commits do not publish the site. The workflow builds a
-production artifact without the browser test harness.
+The **Deploy editor to Pages** workflow tests and publishes the editor when changes
+are pushed to `develop`. Pull requests to `develop` run the same build and tests
+without publishing. You can also run the workflow manually from the Actions tab;
+select `develop` to deploy. Other branches only build and test.
+
+For a new repository or fork, select **GitHub Actions** in **Settings → Pages**.
+If the `github-pages` environment restricts deployment branches, allow `develop`.
+The deployment job runs only after the Rust, TypeScript, and browser checks pass.
+It publishes the production `dist` directory without the browser test harness.
+The workflow smoke-tests that production build before upload and retains browser
+failure traces and screenshots as an Actions artifact for seven days.
 
 Quickshare links use the current site's address. Share files also work without
 a public host. See the [Quickshare guide](src/gridiron_playbook/quickshare/README.md)

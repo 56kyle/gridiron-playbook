@@ -1,26 +1,28 @@
 name: Deploy editor to Pages
 
 on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: pages-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  deploy:
+  build:
+    name: Build and test editor
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
@@ -31,17 +33,55 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Install Wasm bindings tool
         run: cargo install wasm-bindgen-cli --version 0.2.130 --locked --root .tools
-      - run: npm ci
-      - run: cargo test --manifest-path rust/Cargo.toml -p gridiron-playbook-core --locked
-      - run: npm run build:test
-      - run: npm test
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
-      - run: npm run build
-      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Test shared Rust core
+        run: cargo test --manifest-path rust/Cargo.toml -p gridiron-playbook-core --locked
+      - name: Build browser test application
+        run: npm run build:test
+      - name: Test frontend logic
+        run: npm test
+      - name: Install test browser
+        run: npx playwright install --with-deps chromium
+      - name: Test browser application
+        run: npm run test:browser
+      - name: Build production site
+        run: npm run build
+      - name: Verify production artifact
+        run: |
+          test -f dist/index.html
+          test ! -e dist/test-harness.html
+      - name: Smoke-test production site
+        run: npm run test:browser -- editor.spec.ts --grep "loads the complete editor and Wasm"
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: dist
+      - name: Keep browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-failure-diagnostics
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
