@@ -62,6 +62,13 @@ for precision options, size limits, and compatibility.
 
 ## Working copies and game saves
 
+Select a route on the field or in the route list, then press **Delete** to remove
+it. Drag across empty field space to select nodes. Drag any selected node to move
+the group, or press **Delete** to remove the selected nodes. **Shift-drag** adds
+nodes to the selection; **Shift-click** or **Ctrl/⌘-click** toggles a node.
+**Escape** cancels a drag or clears the selection. Each group move or deletion
+is one **Undo** step. Deleting every node in a route removes that route.
+
 Opening a file creates an editor working copy. Tabs, unsaved changes, selections,
 and unfinished routes are stored in this browser's IndexedDB database. Refresh
 restores the current window; a new window gets an independent copy of the most

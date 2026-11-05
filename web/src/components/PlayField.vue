@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, useId, watch } from "vue";
-import type { Formation, Play, Point } from "../types";
+import type { Formation, NodeSelection, Play, Point } from "../types";
 import type { Draft } from "../workspace";
+import { groupTranslation, mergeNodeSelections, nodeKey, nodesInBox, routeWithMostNodes } from "../nodeSelection";
 import {
   FIELD_HEIGHT,
   FIELD_WIDTH,
@@ -24,32 +25,67 @@ const props = withDefaults(
   { readonly: false }
 );
 const emit = defineEmits<{
-  select: [index: number];
+  select: [index: number | null];
   start: [slot: number];
   draft: [points: Point[]];
   finish: [];
   cancel: [];
-  move: [index: number, point: Point];
+  moveNodes: [nodes: NodeSelection[], offset: Pick<Point, "x" | "y">];
   insert: [index: number, point: Point];
-  delete: [index: number];
+  deleteNodes: [nodes: NodeSelection[]];
+  deleteRoute: [];
   block: [index: number];
 }>();
 const field = ref<SVGSVGElement>();
 const id = useId().replaceAll(":", "");
 const transform = computed(() => fieldTransform(props.play, props.formation));
 const selectedRoute = computed(() => (props.selected === null ? undefined : props.play.routes[props.selected]));
-const activePoint = ref<number | null>(null);
+const selectedNodes = ref<NodeSelection[]>([]);
+const selectedKeys = computed(() => new Set(selectedNodes.value.map(nodeKey)));
+let pendingRoute: number | null = null;
+let suppressClick = false;
 const addingNode = ref(false);
 const preview = ref<FieldPoint | null>(null);
 const insertion = ref<{ index: number; position: FieldPoint } | null>(null);
 const undone = ref<Point[]>([]);
-const drag = ref<{
-  pointer: number;
-  index: number;
-  start: FieldPoint;
-  position: FieldPoint;
-  offset: FieldPoint;
-} | null>(null);
+const drag = ref<
+  | {
+      kind: "nodes";
+      pointer: number;
+      start: FieldPoint;
+      offset: FieldPoint;
+      nodes: NodeSelection[];
+      positions: FieldPoint[];
+    }
+  | {
+      kind: "box";
+      pointer: number;
+      start: FieldPoint;
+      position: FieldPoint;
+      before: NodeSelection[];
+      additive: boolean;
+    }
+  | null
+>(null);
+const nodeRoutes = computed(() => {
+  if (drag.value?.kind === "box") return props.play.routes.map((_, index) => index);
+  return [
+    ...new Set([
+      ...(props.selected === null ? [] : [props.selected]),
+      ...selectedNodes.value.map((node) => node.route_index),
+    ]),
+  ];
+});
+const selectionBox = computed(() => {
+  const current = drag.value;
+  if (current?.kind !== "box") return null;
+  return {
+    x: Math.min(current.start[0], current.position[0]),
+    y: Math.min(current.start[1], current.position[1]),
+    width: Math.abs(current.start[0] - current.position[0]),
+    height: Math.abs(current.start[1] - current.position[1]),
+  };
+});
 const routeOrder = computed(() =>
   props.play.routes.map((_, i) => i).sort((a, b) => Number(a === props.selected) - Number(b === props.selected))
 );
@@ -57,23 +93,38 @@ const draftPoints = computed(() => props.draft?.points.map(transform.value.proje
 const minimumPoints = computed(() => (props.draft && origin(props.draft.slot) ? 1 : 2));
 const originY = computed(() => transform.value.project({ x: 0, y: 0 })[1]);
 const draftLabel = computed(() => positionLabel(props.formation, props.draft?.slot ?? -1));
-const nodeMinimum = computed(() => (selectedRoute.value && origin(selectedRoute.value.slot) ? 1 : 2));
-const blockTarget = computed(() => activePoint.value ?? (selectedRoute.value?.points.length ?? 0) - 1);
+const blockTarget = computed(() =>
+  selectedNodes.value.length === 1 ? selectedNodes.value[0]!.point_index : (selectedRoute.value?.points.length ?? 0) - 1
+);
 
 watch(
-  () => [props.selected, props.draft?.slot, props.play.formation_name],
-  () => {
-    activePoint.value = null;
+  () => props.selected,
+  (selected) => {
+    if (selected !== null && selected === pendingRoute) {
+      pendingRoute = null;
+      return;
+    }
+    pendingRoute = null;
+    cancelDrag();
+    selectedNodes.value = [];
     addingNode.value = false;
     insertion.value = null;
-    preview.value = null;
-    undone.value = [];
   }
 );
+
+watch([() => props.draft?.slot, () => props.play.formation_name], () => {
+  cancelDrag();
+  selectedNodes.value = [];
+  addingNode.value = false;
+  insertion.value = null;
+  preview.value = null;
+  undone.value = [];
+});
 watch(
-  () => selectedRoute.value?.points.length,
-  (length) => {
-    if (activePoint.value !== null && activePoint.value >= (length ?? 0)) activePoint.value = null;
+  () => props.play.routes.map((route) => route.points.length).join(","),
+  () => {
+    cancelDrag();
+    selectedNodes.value = [];
   }
 );
 
@@ -82,9 +133,31 @@ function origin(slot: number): FieldPoint | undefined {
   return position && transform.value.project(position);
 }
 function points(index: number): FieldPoint[] {
-  return props.play.routes[index]!.points.map((point, pointIndex) =>
-    index === props.selected && drag.value?.index === pointIndex ? drag.value.position : transform.value.project(point)
-  );
+  return props.play.routes[index]!.points.map((point, pointIndex) => {
+    const projected = transform.value.project(point);
+    return drag.value?.kind === "nodes" && isSelected(index, pointIndex)
+      ? [projected[0] + drag.value.offset[0], projected[1] + drag.value.offset[1]]
+      : projected;
+  });
+}
+function isSelected(route_index: number, point_index: number): boolean {
+  return selectedKeys.value.has(nodeKey({ route_index, point_index }));
+}
+function activateSelection(): void {
+  const route = routeWithMostNodes(selectedNodes.value, props.selected);
+  if (route !== null && route !== props.selected) {
+    pendingRoute = route;
+    emit("select", route);
+  }
+}
+function selectNode(route_index: number, point_index: number, additive = false): void {
+  const node = { route_index, point_index };
+  selectedNodes.value = additive
+    ? isSelected(route_index, point_index)
+      ? selectedNodes.value.filter((candidate) => nodeKey(candidate) !== nodeKey(node))
+      : [...selectedNodes.value, node]
+    : [node];
+  activateSelection();
 }
 function polyline(route: FieldPoint[], start?: FieldPoint): string {
   return (start ? [start, ...route] : route).map((point) => point.join(",")).join(" ");
@@ -95,14 +168,18 @@ function color(slot: number): string {
 function focus(): void {
   field.value?.focus({ preventScroll: true });
 }
+function hasFocus(): boolean {
+  return field.value?.parentElement?.contains(document.activeElement) ?? false;
+}
 function choosePlayer(slot: number): void {
   if (props.readonly || props.draft || addingNode.value) return;
   const route = props.play.routes.findIndex((candidate) => candidate.slot === slot);
-  route < 0 ? emit("start", slot) : emit("select", route);
+  route < 0 ? emit("start", slot) : chooseRoute(route);
   focus();
 }
 function chooseRoute(index: number): void {
   if (!props.readonly && !props.draft && !addingNode.value) {
+    selectedNodes.value = [];
     emit("select", index);
     focus();
   }
@@ -148,40 +225,90 @@ function movePointer(event: PointerEvent): void {
   if (props.draft) preview.value = position;
   else if (addingNode.value) insertion.value = nearest(position);
   else if (drag.value?.pointer === event.pointerId) {
-    drag.value.position = [
-      Math.min(FIELD_WIDTH, Math.max(0, position[0] + drag.value.offset[0])),
-      Math.min(FIELD_HEIGHT, Math.max(0, position[1] + drag.value.offset[1])),
-    ];
+    const current = drag.value;
+    if (current.kind === "nodes") {
+      current.offset = groupTranslation(current.positions, [
+        position[0] - current.start[0],
+        position[1] - current.start[1],
+      ]);
+    } else {
+      current.position = position;
+      const inside = nodesInBox(props.play, transform.value, current.start, position);
+      selectedNodes.value = current.additive ? mergeNodeSelections(current.before, inside) : inside;
+    }
   }
 }
-function startDrag(event: PointerEvent, index: number): void {
-  if (props.readonly || props.draft || addingNode.value || event.button !== 0 || props.selected === null) return;
-  const position = pointer(event),
-    point = points(props.selected)[index];
-  if (!position || !point) return;
-  activePoint.value = index;
+function startBox(event: PointerEvent): void {
+  if (props.readonly || props.draft || addingNode.value || event.button !== 0) return;
+  const position = pointer(event);
+  if (!position) return;
+  event.preventDefault();
   focus();
   field.value?.setPointerCapture(event.pointerId);
   drag.value = {
+    kind: "box",
     pointer: event.pointerId,
-    index,
-    start: point,
-    position: point,
-    offset: [point[0] - position[0], point[1] - position[1]],
+    start: position,
+    position,
+    before: [...selectedNodes.value],
+    additive: event.shiftKey || event.ctrlKey || event.metaKey,
   };
 }
-function cancelDrag(): void {
+function startDrag(event: PointerEvent, route: number, index: number): void {
+  if (props.readonly || props.draft || addingNode.value || event.button !== 0) return;
+  const position = pointer(event);
+  if (!position) return;
+  focus();
+  if (event.shiftKey || event.ctrlKey || event.metaKey) {
+    selectNode(route, index, true);
+    return;
+  }
+  if (!isSelected(route, index)) selectNode(route, index);
+  field.value?.setPointerCapture(event.pointerId);
+  drag.value = {
+    kind: "nodes",
+    pointer: event.pointerId,
+    start: position,
+    offset: [0, 0],
+    nodes: [...selectedNodes.value],
+    positions: selectedNodes.value.map((node) =>
+      transform.value.project(props.play.routes[node.route_index]!.points[node.point_index]!)
+    ),
+  };
+}
+function releaseDrag(): void {
   const current = drag.value;
   drag.value = null;
   if (current && field.value?.hasPointerCapture(current.pointer)) field.value.releasePointerCapture(current.pointer);
+}
+function cancelDrag(): void {
+  const current = drag.value;
+  if (current?.kind === "box") selectedNodes.value = current.before;
+  if (current) suppressClick = true;
+  releaseDrag();
 }
 function endDrag(event: PointerEvent): void {
   if (drag.value?.pointer !== event.pointerId) return;
   movePointer(event);
   const current = drag.value;
-  cancelDrag();
-  if (Math.hypot(current.position[0] - current.start[0], current.position[1] - current.start[1]) > 0.01)
-    emit("move", current.index, transform.value.unproject(current.position));
+  releaseDrag();
+  suppressClick = true;
+  if (current.kind === "box") {
+    if (selectedNodes.value.length) activateSelection();
+    else if (!current.additive) emit("select", null);
+  } else if (Math.hypot(...current.offset) > 0.01) {
+    emit("moveNodes", current.nodes, {
+      x: -current.offset[1] / transform.value.scale,
+      y: current.offset[0] / transform.value.scale,
+    });
+  }
+}
+function consumeClick(event: MouseEvent): void {
+  if (suppressClick && event.detail > 0) {
+    suppressClick = false;
+    event.stopPropagation();
+    event.preventDefault();
+  }
 }
 function undoPoint(): void {
   if (!props.draft?.points.length) return;
@@ -197,13 +324,15 @@ function finish(): void {
   if (props.draft && props.draft.points.length >= minimumPoints.value) emit("finish");
 }
 function toggleNode(): void {
+  selectedNodes.value = [];
   addingNode.value = !addingNode.value;
   insertion.value = null;
   focus();
 }
-function deleteNode(): void {
-  if (activePoint.value !== null && (selectedRoute.value?.points.length ?? 0) > nodeMinimum.value)
-    emit("delete", activePoint.value);
+function deleteSelection(): void {
+  if (drag.value || addingNode.value) return;
+  if (selectedNodes.value.length) emit("deleteNodes", [...selectedNodes.value]);
+  else if (selectedRoute.value) emit("deleteRoute");
 }
 function handleKey(event: KeyboardEvent): boolean {
   if (props.readonly || event.altKey) return false;
@@ -219,17 +348,20 @@ function handleKey(event: KeyboardEvent): boolean {
   } else if (key === "escape") {
     if (drag.value) cancelDrag();
     else if (addingNode.value) toggleNode();
-    else if (activePoint.value !== null) activePoint.value = null;
+    else if (selectedNodes.value.length) selectedNodes.value = [];
+    else if (props.selected !== null) emit("select", null);
     else return false;
-  } else if (key === "delete" && activePoint.value !== null && field.value?.contains(document.activeElement))
-    deleteNode();
-  else if (key === "b" && !modifier && selectedRoute.value) emit("block", blockTarget.value);
+  } else if (drag.value && modifier && key === "z") cancelDrag();
+  else if (key === "delete" && !modifier && hasFocus() && (selectedNodes.value.length || selectedRoute.value))
+    deleteSelection();
+  else if (key === "b" && !modifier && selectedRoute.value && selectedNodes.value.length <= 1)
+    emit("block", blockTarget.value);
   else if (key === "n" && !modifier && selectedRoute.value) toggleNode();
   else return false;
   event.preventDefault();
   return true;
 }
-defineExpose({ handleKey });
+defineExpose({ handleKey, selectRoute: chooseRoute, focus, hasFocus });
 </script>
 
 <template>
@@ -244,6 +376,8 @@ defineExpose({ handleKey });
       :tabindex="readonly ? undefined : 0"
       :style="{ cursor: draft || addingNode ? 'crosshair' : 'default' }"
       @click="place"
+      @click.capture="consumeClick"
+      @pointerdown.capture="suppressClick = false"
       @pointermove="movePointer"
       @pointerup="endDrag"
       @lostpointercapture="cancelDrag"
@@ -273,7 +407,7 @@ defineExpose({ handleKey });
           <path d="M1 1L11 6L1 11" fill="none" stroke="context-stroke" stroke-width="2.2" stroke-linejoin="round" />
         </marker>
       </defs>
-      <rect width="800" height="630" :fill="`url(#${id}-grid)`" />
+      <rect width="800" height="630" :fill="`url(#${id}-grid)`" @pointerdown="startBox" />
       <path d="M18 0V630 M782 0V630" stroke="var(--grid)" pointer-events="none" />
       <path :d="`M18 ${originY}H782`" stroke="var(--baseline)" stroke-width="1.5" pointer-events="none">
         <title>Line of scrimmage</title>
@@ -286,7 +420,7 @@ defineExpose({ handleKey });
         :tabindex="readonly || draft || addingNode ? undefined : 0"
         :aria-label="`Select ${positionLabel(formation, play.routes[index]!.slot)} route ${index + 1}`"
         :aria-pressed="selected === index"
-        :opacity="draft || (selected !== null && selected !== index) ? 0.5 : 1"
+        :opacity="draft || (selected !== null && !nodeRoutes.includes(index)) ? 0.5 : 1"
         @click="chooseRoute(index)"
         @keydown.enter.prevent="chooseRoute(index)"
         @keydown.space.prevent="chooseRoute(index)"
@@ -366,31 +500,44 @@ defineExpose({ handleKey });
           {{ markerLabel(player.label) }}
         </text>
       </g>
-      <g v-if="!readonly && selectedRoute && selected !== null && !draft">
-        <g
-          v-for="(point, index) in points(selected)"
-          :key="index"
-          :data-point-index="index"
-          :transform="`translate(${point.join(' ')})`"
-          role="button"
-          :tabindex="addingNode ? -1 : 0"
-          :aria-label="`Select node ${index + 1}`"
-          :aria-pressed="activePoint === index"
-          @pointerdown.stop.prevent="startDrag($event, index)"
-          @click.stop="activePoint = index"
-          @focus="activePoint = index"
-          @keydown.enter.prevent="activePoint = index"
-          @keydown.space.prevent="activePoint = index"
-        >
-          <circle r="12" fill="transparent" />
-          <circle
-            :r="activePoint === index ? 6 : 4"
-            :fill="activePoint === index ? color(selectedRoute.slot) : 'var(--field)'"
-            :stroke="activePoint === index ? 'var(--ink)' : color(selectedRoute.slot)"
-            stroke-width="2"
-          />
+      <g v-if="!readonly && !draft">
+        <g v-for="route in nodeRoutes" :key="route" :data-node-route="route">
+          <g
+            v-for="(point, index) in points(route)"
+            :key="index"
+            :data-point-index="index"
+            :transform="`translate(${point.join(' ')})`"
+            role="button"
+            :tabindex="addingNode ? -1 : 0"
+            :aria-label="`Select node ${index + 1} on route ${route + 1}`"
+            :aria-pressed="isSelected(route, index)"
+            @pointerdown.stop.prevent="startDrag($event, route, index)"
+            @click.stop
+            @focus="!isSelected(route, index) && selectNode(route, index)"
+            @keydown.enter.prevent="selectNode(route, index, $event.shiftKey || $event.ctrlKey || $event.metaKey)"
+            @keydown.space.prevent="selectNode(route, index, $event.shiftKey || $event.ctrlKey || $event.metaKey)"
+          >
+            <circle r="12" fill="transparent" />
+            <circle
+              :r="isSelected(route, index) ? 6 : 4"
+              :fill="isSelected(route, index) ? color(play.routes[route]!.slot) : 'var(--field)'"
+              :stroke="isSelected(route, index) ? 'var(--ink)' : color(play.routes[route]!.slot)"
+              stroke-width="2"
+            />
+          </g>
         </g>
       </g>
+      <rect
+        v-if="selectionBox"
+        data-selection-box
+        v-bind="selectionBox"
+        fill="var(--accent)"
+        fill-opacity="0.15"
+        stroke="var(--accent)"
+        stroke-width="1.5"
+        stroke-dasharray="6 4"
+        pointer-events="none"
+      />
       <g v-if="addingNode" pointer-events="none">
         <circle
           v-if="insertion"
@@ -429,14 +576,14 @@ defineExpose({ handleKey });
         Add node
       </button>
       <button
-        :disabled="activePoint === null || selectedRoute.points.length <= nodeMinimum || addingNode"
-        title="Delete selected node (Delete)"
-        @click="deleteNode"
+        :disabled="!selectedNodes.length || addingNode || !!drag"
+        title="Delete selected nodes (Delete)"
+        @click="deleteSelection"
       >
-        Delete node
+        {{ selectedNodes.length > 1 ? "Delete nodes" : "Delete node" }}
       </button>
       <button
-        :disabled="blockTarget < 0 || addingNode"
+        :disabled="blockTarget < 0 || addingNode || selectedNodes.length > 1"
         title="Add a block at the selected node or route end (B)"
         @click="emit('block', blockTarget)"
       >

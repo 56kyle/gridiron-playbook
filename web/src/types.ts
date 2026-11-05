@@ -3,6 +3,10 @@ export interface Point {
   y: number;
   z: number;
 }
+export interface NodeSelection {
+  route_index: number;
+  point_index: number;
+}
 export interface Route {
   slot: number;
   points: Point[];
@@ -57,5 +61,7 @@ export type EditCommand =
       y: number;
     }
   | { type: "delete_point" | "add_block"; play_index: number; route_index: number; point_index: number }
+  | { type: "move_points"; play_index: number; points: NodeSelection[]; dx: number; dy: number }
+  | { type: "delete_points"; play_index: number; points: NodeSelection[] }
   | { type: "delete_route"; play_index: number; route_index: number }
   | { type: "clear_routes" | "flip_play"; play_index: number };

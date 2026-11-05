@@ -54,7 +54,7 @@ const customSlot = ref(7);
       <button
         class="icon-button"
         aria-label="Delete route"
-        title="Delete route"
+        title="Delete route (Delete)"
         :disabled="busy || drawing || selected === null"
         @click="emit('deleteRoute')"
       >

@@ -4,6 +4,13 @@ use crate::{block, formation};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+struct PointSelection {
+    route_index: usize,
+    point_index: usize,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum Edit {
@@ -41,6 +48,16 @@ enum Edit {
         point_index: usize,
         x: f64,
         y: f64,
+    },
+    MovePoints {
+        play_index: usize,
+        points: Vec<PointSelection>,
+        dx: f64,
+        dy: f64,
+    },
+    DeletePoints {
+        play_index: usize,
+        points: Vec<PointSelection>,
     },
     InsertPoint {
         play_index: usize,
@@ -131,6 +148,53 @@ fn update_point(point: &mut Value, x: f64, y: f64) -> Result<()> {
     Ok(())
 }
 
+fn selected_points(mut points: Vec<PointSelection>, play: &Play) -> Result<Vec<PointSelection>> {
+    if points.is_empty() {
+        return Err(Error::new("invalid_selection", "Select at least one node."));
+    }
+    points.sort_unstable();
+    if points.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(Error::new(
+            "invalid_selection",
+            "Select each node only once.",
+        ));
+    }
+    for point in &points {
+        play.routes
+            .get(point.route_index)
+            .and_then(|route| route.points.get(point.point_index))
+            .ok_or_else(invalid_index)?;
+    }
+    Ok(points)
+}
+
+fn delete_points(play: &mut Value, normalized: &Play, points: Vec<PointSelection>) -> Result<()> {
+    let selected = selected_points(points, normalized)?;
+    let mut counts = vec![0; normalized.routes.len()];
+    for point in &selected {
+        counts[point.route_index] += 1;
+    }
+    for (route_index, &count) in counts.iter().enumerate().filter(|(_, count)| **count > 0) {
+        let route = &normalized.routes[route_index];
+        let remaining = route.points.len() - count;
+        if remaining == 1 && formation::start(&normalized.formation_name, route.slot).is_none() {
+            return Err(Error::new(
+                "invalid_geometry",
+                "A route without a known starting position needs two nodes. Select all its nodes to delete the route.",
+            ));
+        }
+    }
+    for point in selected.into_iter().rev() {
+        points_mut(play, point.route_index)?.remove(point.point_index);
+    }
+    for (route_index, &count) in counts.iter().enumerate().rev() {
+        if count > 0 && count == normalized.routes[route_index].points.len() {
+            routes_mut(play)?.remove(route_index);
+        }
+    }
+    Ok(())
+}
+
 fn mutate_play(play: &mut Value, edit: Edit) -> Result<()> {
     let normalized = document::play_from_raw(play)?;
     match edit {
@@ -167,6 +231,28 @@ fn mutate_play(play: &mut Value, edit: Edit) -> Result<()> {
                 .ok_or_else(invalid_index)?;
             update_point(point, x, y)?;
         }
+        Edit::MovePoints { points, dx, dy, .. } => {
+            let selected = selected_points(points, &normalized)?;
+            for selected in selected {
+                let original =
+                    &normalized.routes[selected.route_index].points[selected.point_index];
+                let point = &mut points_mut(play, selected.route_index)?[selected.point_index];
+                update_point(
+                    point,
+                    if dx == 0.0 {
+                        original.x
+                    } else {
+                        original.x + dx
+                    },
+                    if dy == 0.0 {
+                        original.y
+                    } else {
+                        original.y + dy
+                    },
+                )?;
+            }
+        }
+        Edit::DeletePoints { points, .. } => delete_points(play, &normalized, points)?,
         Edit::InsertPoint {
             route_index,
             point_index,
@@ -342,6 +428,8 @@ pub fn apply_edit(text: &str, command_json: &str) -> Result<String> {
                 | Edit::ChangeFormation { play_index, .. }
                 | Edit::AddRoute { play_index, .. }
                 | Edit::MovePoint { play_index, .. }
+                | Edit::MovePoints { play_index, .. }
+                | Edit::DeletePoints { play_index, .. }
                 | Edit::InsertPoint { play_index, .. }
                 | Edit::DeletePoint { play_index, .. }
                 | Edit::AddBlock { play_index, .. }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import * as engine from "./engine";
-import type { EditCommand, Formation, Play, Point, ShareKind } from "./types";
+import type { EditCommand, Formation, NodeSelection, Play, Point, ShareKind } from "./types";
 import { Workspace } from "./workspace";
 import { openWorkspace, type WorkspaceSession } from "./storage";
 import { prepareInstall, prepareRestore, GameFileError, type PreparedGameChange } from "./gameFiles";
@@ -70,6 +70,7 @@ function answer(accepted: boolean): void {
 }
 async function run(operation: () => Promise<void>): Promise<void> {
   if (busy.value) return;
+  const focusedField = field.value?.hasFocus() ? field.value : null;
   busy.value = true;
   error.value = "";
   notice.value = "";
@@ -79,6 +80,14 @@ async function run(operation: () => Promise<void>): Promise<void> {
     if (!(cause instanceof GameFileError && cause.code === "cancelled")) error.value = message(cause);
   } finally {
     busy.value = false;
+    await nextTick();
+    if (
+      focusedField &&
+      field.value === focusedField &&
+      document.activeElement === document.body &&
+      !document.querySelector("dialog[open]")
+    )
+      focusedField.focus();
   }
 }
 
@@ -146,22 +155,41 @@ function playEdit(type: "rename_play" | "change_formation" | "flip_play" | "clea
       : { type, play_index }
   );
 }
-function routeEdit(
-  type: "move_point" | "insert_point" | "delete_point" | "add_block" | "delete_route",
-  point_index?: number,
-  point?: Point
-): void {
+function routeEdit(type: "insert_point" | "add_block" | "delete_route", point_index?: number, point?: Point): void {
   const tab = active.value;
   if (!tab || tab.selectedRoute === null) return;
   const base = { play_index: tab.selection[0]!, route_index: tab.selectedRoute };
   if (type === "delete_route") {
-    void edit({ type, ...base });
+    void run(async () => {
+      await workspace.edit({ type, ...base });
+      tab.selectedRoute = null;
+    });
     return;
   }
   if (point_index === undefined) return;
-  if (type === "move_point" || type === "insert_point") {
+  if (type === "insert_point") {
     if (point) void edit({ type, ...base, point_index, x: point.x, y: point.y });
   } else void edit({ type, ...base, point_index });
+}
+function moveNodes(points: NodeSelection[], offset: Pick<Point, "x" | "y">): void {
+  if (!active.value) return;
+  void edit({ type: "move_points", play_index: active.value.selection[0]!, points, dx: offset.x, dy: offset.y });
+}
+function deleteNodes(points: NodeSelection[]): void {
+  const tab = active.value,
+    current = play.value;
+  if (!tab || !current) return;
+  const counts = new Map<number, number>();
+  for (const node of points) counts.set(node.route_index, (counts.get(node.route_index) ?? 0) + 1);
+  const removed = current.routes.flatMap((route, index) => (counts.get(index) === route.points.length ? [index] : []));
+  const selected = tab.selectedRoute;
+  void run(async () => {
+    await workspace.edit({ type: "delete_points", play_index: tab.selection[0]!, points });
+    tab.selectedRoute =
+      selected === null || removed.includes(selected)
+        ? null
+        : selected - removed.filter((index) => index < selected).length;
+  });
 }
 function draw(slot: number): void {
   if (!active.value || busy.value) return;
@@ -607,9 +635,10 @@ onBeforeUnmount(() => {
           @draft="draft"
           @finish="finishRoute"
           @cancel="active && (active.draft = null)"
-          @move="(index, point) => routeEdit('move_point', index, point)"
+          @move-nodes="moveNodes"
           @insert="(index, point) => routeEdit('insert_point', index, point)"
-          @delete="(index) => routeEdit('delete_point', index)"
+          @delete-nodes="deleteNodes"
+          @delete-route="routeEdit('delete_route')"
           @block="(index) => routeEdit('add_block', index)"
         />
         <div v-else class="empty-state">
@@ -627,7 +656,7 @@ onBeforeUnmount(() => {
         :busy="busy"
         @rename="playEdit('rename_play', $event)"
         @formation="playEdit('change_formation', $event)"
-        @select="active && (active.selectedRoute = $event)"
+        @select="field?.selectRoute($event)"
         @draw="draw"
         @delete-route="routeEdit('delete_route')"
         @flip="playEdit('flip_play')"
@@ -756,8 +785,14 @@ onBeforeUnmount(() => {
         <dd><kbd>Esc</kbd></dd>
         <dt>Remove last drawn point</dt>
         <dd><kbd>Backspace</kbd> or right-click</dd>
-        <dt>Delete selected node</dt>
+        <dt>Delete selected nodes or route</dt>
         <dd><kbd>Delete</kbd></dd>
+        <dt>Select nodes</dt>
+        <dd>Drag on empty field; <kbd>Shift</kbd> to add</dd>
+        <dt>Toggle a node</dt>
+        <dd><kbd>Shift click</kbd> or <kbd>Ctrl/⌘ click</kbd></dd>
+        <dt>Move selected nodes</dt>
+        <dd>Drag any selected node</dd>
         <dt>Add node / block</dt>
         <dd><kbd>N</kbd> / <kbd>B</kbd></dd>
         <dt>Select multiple plays</dt>
