@@ -1,11 +1,14 @@
 # Gridiron Playbook
 
-Create, edit, and share Gridiron plays in your browser. The editor is a static
-Vue/TypeScript application. Rust runs locally in WebAssembly to read and write
-Unreal saves, apply edits, and encode Quickshare links. No Python server or play
-storage service is required.
+**[Open the live editor](https://56kyle.github.io/gridiron-playbook/)**
 
-## Run locally
+Create, edit, and share Gridiron plays in your browser. No installation required.
+
+The editor is a static Vue/TypeScript application. Rust runs locally in
+WebAssembly to read and write Unreal saves, apply edits, and encode Quickshare
+links. No Python server or play storage service is required.
+
+## Local development
 
 Install Node.js 22.12 or later and a current stable Rust toolchain. On Windows,
 Rust also requires the Visual Studio C++ build tools.
