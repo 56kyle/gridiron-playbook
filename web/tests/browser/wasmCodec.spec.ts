@@ -1,10 +1,58 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync, readdirSync } from "node:fs";
-import type { ShareView } from "../../src/types";
+import { inflateSync } from "node:zlib";
+import type { SharePrecision, ShareView } from "../../src/types";
 import type {} from "../../test-harness";
 
 const corpus = new URL("../../../rust/core/tests/fixtures/quickshare/", import.meta.url);
 const fixtures = readdirSync(corpus).filter((name) => name.endsWith(".gridironshare"));
+const precisions: SharePrecision[] = ["exact", "1mm", "1cm"];
+
+for (const fixture of fixtures.filter((name) => name.endsWith("_exact.gridironshare"))) {
+  for (const precision of precisions) {
+    test(`browser Wasm encodes ${fixture} with the Python ${precision} wire format`, async ({ page }) => {
+      const source = Array.from(readFileSync(new URL(fixture, corpus)));
+      const expected = readFileSync(new URL(fixture.replace("_exact", `_${precision}`), corpus));
+      await page.goto("./test-harness.html");
+      await expect(page.locator("#status")).toHaveText("Ready");
+      const encoded = await page.evaluate(
+        async ({ source, precision }) => {
+          const payload = new Uint8Array(source);
+          const decoded = await window.testEngine.inspectShare(payload);
+          const blank = await window.testEngine.newDocument();
+          const imported = await window.testEngine.importShare(blank, payload);
+          return Array.from(
+            await window.testEngine.encodeShare(
+              imported.document,
+              decoded.plays.map((_, index) => index),
+              decoded.kind,
+              precision
+            )
+          );
+        },
+        { source, precision }
+      );
+      expect(inflateSync(Buffer.from(encoded))).toEqual(inflateSync(expected));
+    });
+  }
+}
+
+for (const precision of precisions) {
+  test(`browser Wasm compresses legacy block points at ${precision}`, async ({ page }) => {
+    const source = Array.from(readFileSync(new URL("v1_block.gridironshare", corpus)));
+    await page.goto("./test-harness.html");
+    await expect(page.locator("#status")).toHaveText("Ready");
+    const encoded = await page.evaluate(
+      async ({ source, precision }) => {
+        const blank = await window.testEngine.newDocument();
+        const imported = await window.testEngine.importShare(blank, new Uint8Array(source));
+        return Array.from(await window.testEngine.encodeShare(imported.document, [0], "play", precision));
+      },
+      { source, precision }
+    );
+    expect(encoded.length).toBeLessThan(source.length / 2);
+  });
+}
 
 for (const fixture of fixtures) {
   test(`browser Wasm opens the existing ${fixture} share and preserves an Exact re-share`, async ({ page }) => {

@@ -16,3 +16,10 @@ Exact expectations compare binary64 bits, including signed zero. Compact block
 directions allow a small numeric tolerance because trigonometric implementations
 can differ across runtimes. Re-encoding any decoded result in Exact mode must
 preserve its own point bits without that tolerance.
+
+Browser tests also encode each Exact fixture at all three precisions and compare
+the decompressed bytes with the corresponding Python fixture. This checks that
+Wasm retains coordinate deltas, omitted zero heights, shared formation names,
+and block instructions. Compressed bytes can differ between the Python and Rust
+compression libraries. A separate size check requires re-shared legacy blocks
+to use less than half their original compressed size at every precision.
