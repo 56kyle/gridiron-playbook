@@ -31,14 +31,19 @@ for (const precision of ["Exact", "1 mm", "1 cm"]) {
 
     const recipient = await context.newPage();
     await recipient.goto(link);
-    await recipient.getByRole("button", { name: "Import play", exact: true }).click();
-    await expect(playNames(recipient).first()).toHaveText("Source 1");
+    const preview = recipient.getByRole("dialog", { name: "Quickshare", exact: true });
+    await expect(preview).toBeVisible();
+    const existingPlays = await playNames(recipient).allTextContents();
+    await preview.getByRole("button", { name: "Import play", exact: true }).click();
+    await expect(preview).toHaveCount(0);
+    await expect(playNames(recipient)).toHaveText(["Source 1", ...existingPlays]);
+    await ready(recipient);
     await recipient
       .getByTestId("open-files")
       .setInputFiles({ name: "single.gridironshare", mimeType: "application/octet-stream", buffer: bytes });
-    await recipient.getByRole("button", { name: "Import play", exact: true }).click();
-    await expect(playNames(recipient).nth(0)).toHaveText("Source 1");
-    await expect(playNames(recipient).nth(1)).toHaveText("Source 1");
+    await preview.getByRole("button", { name: "Import play", exact: true }).click();
+    await expect(preview).toHaveCount(0);
+    await expect(playNames(recipient)).toHaveText(["Source 1", "Source 1", ...existingPlays]);
     await recipient.close();
   });
 }
